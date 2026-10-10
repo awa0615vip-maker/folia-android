@@ -1182,7 +1182,8 @@ describe('kugouProvider', () => {
 
         const ids = await kugouProvider.library?.getLikedSongIds?.('user');
 
-        expect(ids).toEqual(['ABC123', 'DEF456']);
+        // KuGou's API returns the liked list opposite to the official client's top-to-bottom order.
+        expect(ids).toEqual(['DEF456', 'ABC123']);
         expect(requestMock).toHaveBeenNthCalledWith(1, 'user_playlist', {
             userid: 'user', page: 1, pagesize: 100,
         });
@@ -1218,7 +1219,7 @@ describe('kugouProvider', () => {
         const ids = await kugouProvider.library?.getLikedSongIds?.('user');
 
         expect(ids).toHaveLength(101);
-        expect(ids?.at(-1)).toBe('PAGED-LAST');
+        expect(ids?.[0]).toBe('PAGED-LAST');
         expect(requestMock).toHaveBeenNthCalledWith(2, 'playlist_track_all', {
             id: 'collection_3_liked_test_paged', page: 1, pagesize: 100,
         });
