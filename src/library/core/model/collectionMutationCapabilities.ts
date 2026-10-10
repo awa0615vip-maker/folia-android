@@ -109,7 +109,7 @@ export const resolveCollectionMutationBranches = (input: CollectionMutationBranc
 };
 
 /** 删一个条目走哪条路。daily：不喜欢并换一首；local / navidrome：宿主端口；online：omni。 */
-export type CollectionEntryRemovalKind = 'daily-dislike' | 'local-playlist' | 'navidrome-playlist' | 'online-playlist';
+export type CollectionEntryRemovalKind = 'daily-dislike' | 'local-playlist' | 'local-library' | 'navidrome-playlist' | 'online-playlist';
 
 /**
  * 与 GridView 的 handleRemoveTrack 分支顺序一致。不同的是：没有对应端口时直接判为不支持，
@@ -124,6 +124,7 @@ export const resolveEntryRemovalKind = (
         return branches.canEditPlaylist ? 'daily-dislike' : null;
     }
     if (branches.isLocalPlaylistCollection) return port.local?.removePlaylistSongs ? 'local-playlist' : null;
+    if (branches.isLocalCollection) return port.local?.removeLibrarySongs ? 'local-library' : null;
     if (branches.isNavidromePlaylistCollection) return port.navidrome?.removePlaylistSongs ? 'navidrome-playlist' : null;
     if (branches.canEditOwnedPlaylist || branches.canEditProviderPlaylist) return 'online-playlist';
     return null;

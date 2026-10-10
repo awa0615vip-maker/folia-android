@@ -137,6 +137,7 @@ const noop = async () => {};
 const FULL_PORT: LibraryMutationPort = {
     local: {
         removePlaylistSongs: noop,
+        removeLibrarySongs: noop,
         refresh: noop,
         renamePlaylist: noop,
         deletePlaylist: noop,
@@ -319,7 +320,8 @@ describe('entry removal kind', () => {
         expect(kindOf(naviPlaylist, { port: {} })).toBeNull();
         expect(kindOf(owned)).toBe('online-playlist');
         expect(kindOf(theirs)).toBeNull();
-        expect(kindOf(find(d => d.source === 'local' && d.id === 'f'))).toBeNull();
+        expect(kindOf(find(d => d.source === 'local' && d.id === 'f'))).toBe('local-library');
+        expect(kindOf(find(d => d.source === 'local' && d.id === 'f'), { port: {} })).toBeNull();
     });
 });
 

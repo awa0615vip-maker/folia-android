@@ -2,7 +2,7 @@ import type { TFunction } from 'i18next';
 import type { UnifiedSong } from '../../types';
 import type { LocalGridViewCollectionDescriptor } from '../core/contracts/collection';
 import type { LibraryMutationPort, LibraryPlaylistOption } from '../core/contracts/ports';
-import { deleteFolderSongs, resyncAllFolders, resyncFolder } from '../../services/localMusicService';
+import { deleteFolderSongs, deleteSongsByIds, resyncAllFolders, resyncFolder } from '../../services/localMusicService';
 import { deleteLocalPlaylist, removeSongsFromLocalPlaylist, updateLocalPlaylist } from '../../services/localPlaylistService';
 import { downloadLocalPlaylistM3u8 } from '../../services/localPlaylistFileService';
 import { getNavidromeConfig, navidromeApi } from '../../services/navidromeService';
@@ -90,6 +90,9 @@ export const createLibraryMutationPort = ({
         },
         removePlaylistSongs: async (playlistId, songIds) => {
             await removeSongsFromLocalPlaylist(playlistId, songIds);
+        },
+        removeLibrarySongs: async songIds => {
+            await deleteSongsByIds(songIds);
         },
     },
     navidrome: {

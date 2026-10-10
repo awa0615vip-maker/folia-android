@@ -38,6 +38,7 @@ import {
     pickAndroidLocalMusic,
 } from './nativeLocalMusic';
 import { noteLibraryStep } from '../nativeBridge/api/libraryTrace.js';
+import { noteLocalLibraryDiagnostic } from '../utils/localLibraryDiagnostics';
 
 
 type EmbeddedMetadata = EmbeddedMetadataResult;
@@ -1829,28 +1830,43 @@ export async function getAudioFromFile(file: File): Promise<string> {
 export async function deleteSongsByIds(songIds: string[]): Promise<void> {
     const uniqueSongIds = Array.from(new Set(songIds));
     if (uniqueSongIds.length === 0) return;
-    const allSongs = await getLocalSongs();
-    const deletedIdSet = new Set(uniqueSongIds);
-    const deletedSongs = allSongs.filter(song => deletedIdSet.has(song.id));
-    const affectedRoots = new Set(
-        allSongs
-            .filter(song => deletedIdSet.has(song.id))
-            .map(getRootFolderName)
-            .filter((root): root is string => Boolean(root)),
-    );
-    uniqueSongIds.forEach(id => {
-        fileHandleMap.delete(id);
-        localCoverAssetRequestMap.delete(id);
-    });
-    await Promise.all([
-        dbDeleteLocalSongs(uniqueSongIds),
-        ...uniqueSongIds.map(id => removeCachedCover(`cover_local_${id}`)),
-    ]);
-    await deleteAndroidImportCopies(deletedSongs);
-    await removeDeletedSongIdsFromPlaylists(uniqueSongIds);
-    await Promise.all(Array.from(affectedRoots).map(cleanupDirHandleIfUnused));
-    notifyLocalMusicUpdated();
-    console.log(`[LocalMusic] Deleted ${uniqueSongIds.length} songs by ID`);
+    const startedAt = Date.now();
+    noteLocalLibraryDiagnostic('delete:start', { songs: uniqueSongIds.length });
+    try {
+        const allSongs = await getLocalSongs();
+        const deletedIdSet = new Set(uniqueSongIds);
+        const deletedSongs = allSongs.filter(song => deletedIdSet.has(song.id));
+        const affectedRoots = new Set(
+            allSongs
+                .filter(song => deletedIdSet.has(song.id))
+                .map(getRootFolderName)
+                .filter((root): root is string => Boolean(root)),
+        );
+        uniqueSongIds.forEach(id => {
+            fileHandleMap.delete(id);
+            localCoverAssetRequestMap.delete(id);
+        });
+        await Promise.all([
+            dbDeleteLocalSongs(uniqueSongIds),
+            ...uniqueSongIds.map(id => removeCachedCover(`cover_local_${id}`)),
+        ]);
+        await deleteAndroidImportCopies(deletedSongs);
+        await removeDeletedSongIdsFromPlaylists(uniqueSongIds);
+        await Promise.all(Array.from(affectedRoots).map(cleanupDirHandleIfUnused));
+        notifyLocalMusicUpdated();
+        noteLocalLibraryDiagnostic('delete:done', {
+            songs: uniqueSongIds.length,
+            ms: Date.now() - startedAt,
+        });
+        console.log(`[LocalMusic] Deleted ${uniqueSongIds.length} songs by ID`);
+    } catch (error) {
+        noteLocalLibraryDiagnostic('delete:error', {
+            songs: uniqueSongIds.length,
+            ms: Date.now() - startedAt,
+            message: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+    }
 }
 
 // Removes an imported root from the app, including empty roots. Desktop folders on disk are

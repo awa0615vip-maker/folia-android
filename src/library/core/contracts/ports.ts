@@ -26,6 +26,8 @@ export type LibraryPlaylistOption = { id: string | number; name: string; descrip
 /** 本地曲库的来源动作；最后三个只打开宿主挂载的对话框。 */
 export interface LibraryLocalMutationPort {
     removePlaylistSongs?: (playlistId: string, songIds: string[]) => Promise<void> | void;
+    /** 从本地曲库删除歌曲本身，而不是只从某个本地歌单移除引用。 */
+    removeLibrarySongs?: (songIds: string[]) => Promise<void> | void;
     /** 重新读取本地曲库（歌单、歌曲）。 */
     refresh?: () => Promise<void> | void;
     renamePlaylist?: (playlistId: string, name: string) => Promise<void> | void;

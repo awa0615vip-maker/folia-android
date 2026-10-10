@@ -264,6 +264,22 @@ export const createCollectionMutationController = (
         return resource.removeAt(rawIndex, getPlaybackSongKey(entry.track)) ? OK : fail('stale');
     };
 
+    const removeLocalLibrary = async (
+        entry: LibraryEntryRef,
+        songIds: string[],
+        removeLibrarySongs: (songIds: string[]) => Promise<void> | void,
+    ): Promise<LibraryMutationResult> => {
+        await removeLibrarySongs(songIds);
+        const songIdSet = new Set(songIds);
+        try {
+            await inputs.resource?.removeTracks(track => songIdSet.has(localSongIdOf(track) || ''));
+        } catch (error) {
+            console.warn('[LibraryUi] Failed to commit local library removal:', error);
+        }
+        followUp('Refreshing local library', () => inputs.port.local?.refresh?.());
+        return OK;
+    };
+
     const removeOnline = async (entry: LibraryEntryRef): Promise<LibraryMutationResult> => {
         const { descriptor } = inputs;
         if (descriptor.source !== 'online') return fail('unsupported');
@@ -291,7 +307,7 @@ export const createCollectionMutationController = (
     // 同一首歌（在线 / 本地按歌删）或整个集合（串行的删除）作为去重范围。
     const removalScope = (kind: CollectionEntryRemovalKind, entry: LibraryEntryRef) => {
         if (isSerializedRemoval(kind)) return 'collection';
-        return kind === 'local-playlist'
+        return kind === 'local-playlist' || kind === 'local-library'
             ? `local:${localPlaylistSongIdOf(entry.track)}`
             : `song:${getPlaybackSongKey(entry.track)}`;
     };
@@ -309,12 +325,17 @@ export const createCollectionMutationController = (
 
         let run: () => Promise<LibraryMutationResult>;
         const removeLocalSongs = port.local?.removePlaylistSongs;
+        const removeLocalLibrarySongs = port.local?.removeLibrarySongs;
         const removeNavidromeSongs = port.navidrome?.removePlaylistSongs;
         if (kind === 'daily-dislike') {
             run = () => removeDaily(entry);
         } else if (kind === 'local-playlist' && descriptor.source === 'local' && descriptor.playlistId && removeLocalSongs) {
             const playlistId = descriptor.playlistId;
             run = () => removeLocal(entry, playlistId, removeLocalSongs);
+        } else if (kind === 'local-library' && removeLocalLibrarySongs) {
+            const songId = localSongIdOf(entry.track);
+            if (!songId) return fail('unsupported');
+            run = () => removeLocalLibrary(entry, [songId], removeLocalLibrarySongs);
         } else if (kind === 'navidrome-playlist' && removeNavidromeSongs) {
             // 发请求前先在资源当前的曲目里解出原始下标：不用界面上的显示下标。
             const rawIndex = resolveRawIndex(inputs.resource?.getSnapshot().tracks ?? [], entry.entryKey);
