@@ -7,7 +7,11 @@ import { applyLocalLibraryEntityDisplay, buildUnifiedLocalSong } from '../../../
 import { buildNavidromeSourceRevision } from '../../../services/playbackRecovery/sourceRevision';
 import { getLocalLibraryCatalogSnapshot } from '../../../services/localLibraryEntityRepository';
 import { getNavidromeConfig, navidromeApi } from '../../../services/navidromeService';
-import { applyOnlineAudioSourceMetadata, loadOnlineSongAudioSource } from '../../../services/onlinePlayback';
+import {
+    applyOnlineAudioSourceMetadata,
+    loadOnlineSongAudioSource,
+    loadOnlineSongLyrics,
+} from '../../../services/onlinePlayback';
 import type { ThemeCacheSongKey } from '../../../services/themeCache';
 import type { LyricData, LocalSong, SongResult, StatusMessage } from '../../../types';
 import type { NavidromeSong } from '../../../types/navidrome';
@@ -246,36 +250,46 @@ export const restorePlaybackSourceForSong = async (
 
     const cachedLyrics = await getSongCacheWithLegacyMigration<LyricData>('lyric', song, migrateLyricDataRenderHints);
     const restoredPreferredLyrics = resolveOnlineLyrics(onlineLyricsState, cachedLyrics);
-    if (restoredPreferredLyrics) {
-        const cachedText = restoredPreferredLyrics.lines.map(line => line.fullText).join('\n');
+    const restoredLyricText = restoredPreferredLyrics?.lines.map(line => line.fullText).join('\n') ?? '';
+    const restoredIsPureMusicNotice = Boolean(restoredPreferredLyrics) && isPureMusicLyricText(restoredLyricText);
+    if (restoredPreferredLyrics && !restoredIsPureMusicNotice) {
         setCurrentSong(prev => {
             if (!prev || !isSamePlaybackSong(prev, song)) return prev;
             return {
                 ...prev,
                 isPureMusic: onlineLyricsState?.lyricsSource === 'online' && typeof onlineLyricsState.matchedIsPureMusic === 'boolean'
                     ? onlineLyricsState.matchedIsPureMusic
-                    : isPureMusicLyricText(cachedText),
+                    : isPureMusicLyricText(restoredLyricText),
             };
         });
         setLyrics(restoredPreferredLyrics);
         return true;
     }
 
+    // A restored pure-music notice is often only a provider placeholder. Do not clear the
+    // lyric panel and stop here: route it through the normal lyric pipeline so the regular
+    // provider fetch and automatic best-match can replace the placeholder with real lyrics.
     const songProviderId = song.sourceRef?.kind === 'online' ? song.sourceRef.providerId : null;
     const effectiveUserId = songProviderId
         ? (useOnlineProviderAccountStore.getState().accounts[songProviderId]?.user?.id ?? userId)
         : userId;
-    const processed = await omni.getLyrics(song, { userId: effectiveUserId });
-    const resolvedLyrics = resolveOnlineLyrics(onlineLyricsState, processed.lyrics);
-    setCurrentSong(prev => {
-        if (!prev || !isSamePlaybackSong(prev, song)) return prev;
-        return {
-            ...prev,
-            isPureMusic: onlineLyricsState?.lyricsSource === 'online' && typeof onlineLyricsState.matchedIsPureMusic === 'boolean'
-                ? onlineLyricsState.matchedIsPureMusic
-                : processed.isPureMusic,
-        };
+    setLyrics(null);
+    await loadOnlineSongLyrics(song, null, effectiveUserId, {
+        isCurrent: () => true,
+        onLyrics: setLyrics,
+        onPureMusicChange: isPureMusic => {
+            setCurrentSong(prev => {
+                if (!prev || !isSamePlaybackSong(prev, song)) return prev;
+                return { ...prev, isPureMusic };
+            });
+        },
+        onStateChange: state => {
+            setCurrentSong(prev => {
+                if (!prev || !isSamePlaybackSong(prev, song)) return prev;
+                return { ...prev, onlineLyricsState: state ?? undefined };
+            });
+        },
+        onDone: () => undefined,
     });
-    setLyrics(resolvedLyrics);
     return true;
 };
