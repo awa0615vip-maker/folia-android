@@ -9,7 +9,11 @@ interface RGB {
     b: number;
 }
 
-const loadPixelsFromUrl = (imageUrl: string): Promise<Uint8ClampedArray | null> => (
+/**
+ * 把图片缩到 50×50 读出像素（crossOrigin 匿名请求）。图片加载失败、没有 CORS 头、画布被污染（读像素抛
+ * SecurityError）时都返回 null。silent：失败时不打 warn（墙上一批头像取色时用，失败只是回退）。
+ */
+const loadPixelsFromUrl = (imageUrl: string, { silent = false }: { silent?: boolean } = {}): Promise<Uint8ClampedArray | null> => (
     new Promise(resolve => {
         const img = new Image();
         img.crossOrigin = "Anonymous";
@@ -28,21 +32,18 @@ const loadPixelsFromUrl = (imageUrl: string): Promise<Uint8ClampedArray | null> 
             canvas.width = width;
             canvas.height = height;
 
-            ctx.drawImage(img, 0, 0, width, height);
-
-            // A cover served without CORS headers taints the canvas and this call throws.
-            // Without the catch the promise below would never settle, which is what made
-            // the feature look like it silently did nothing.
             try {
+                ctx.drawImage(img, 0, 0, width, height);
                 resolve(ctx.getImageData(0, 0, width, height).data);
             } catch (error) {
-                console.warn('Cover canvas is not readable (cross-origin image), skipping extraction', error);
+                // 画布被跨源图片污染时 getImageData 抛错；不吞掉的话这个 Promise 永远不 resolve。
+                if (!silent) console.warn("Failed to read image pixels for color extraction", error);
                 resolve(null);
             }
         };
 
         img.onerror = (e) => {
-            console.warn("Failed to load image for color extraction", e);
+            if (!silent) console.warn("Failed to load image for color extraction", e);
             resolve(null);
         };
         img.src = imageUrl;
@@ -53,16 +54,20 @@ const loadPixelsFromUrl = (imageUrl: string): Promise<Uint8ClampedArray | null> 
  * 优先用同源地址读像素：安卓容器里远端封面没有 CORS 头，直接加载会污染画布。
  * 原生桥取回字节转成 blob URL 之后，画布一定可读。
  */
-const loadImagePixels = async (imageUrl: string): Promise<Uint8ClampedArray | null> => {
+export const loadImagePixels = async (
+    imageUrl: string,
+    options: { silent?: boolean } = {},
+): Promise<Uint8ClampedArray | null> => {
+    const { silent = false } = options;
     const sameOrigin = await resolveSameOriginImageSource(imageUrl);
     if (sameOrigin) {
         try {
-            return await loadPixelsFromUrl(sameOrigin.url);
+            return await loadPixelsFromUrl(sameOrigin.url, { silent });
         } finally {
             sameOrigin.revoke();
         }
     }
-    return await loadPixelsFromUrl(imageUrl);
+    return await loadPixelsFromUrl(imageUrl, { silent });
 };
 
 const extractVibrantColorsFromPixels = (imageData: Uint8ClampedArray, count: number): string[] => {

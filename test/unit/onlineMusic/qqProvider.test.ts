@@ -269,6 +269,13 @@ describe('qqProvider', () => {
         expect(normalizeQqSong(song)).toEqual(song);
     });
 
+    // 「我喜欢」= 自建目录 201：首页特殊集合靠 isLiked 认它。收藏条目也带 dirId（创建者的目录号），不算。
+    it('marks only the owned dirId 201 playlist as the liked collection', () => {
+        expect(normalizeQqCollection(PLAYLIST_ITEM).isLiked).toBe(true);
+        expect(normalizeQqCollection({ tid: 8, dirId: 202, dirName: '自建歌单', songNum: 1 }).isLiked).toBeUndefined();
+        expect(normalizeQqCollection({ dissid: 9, dirId: 201, name: '别人的我喜欢', songnum: 1 }).isLiked).toBeUndefined();
+    });
+
     it('normalizes the playlist and profile payloads, including a profile without a display name', () => {
         expect(normalizeQqCollection(PLAYLIST_ITEM)).toEqual({
             providerId: 'qq',
@@ -278,6 +285,7 @@ describe('qqProvider', () => {
             coverUrl: 'https://img.example.test/big.jpg',
             trackCount: 2,
             providerData: { tid: 7, dirId: 201, owned: true },
+            isLiked: true,
         });
         expect(normalizeQqCollection(normalizeQqCollection(PLAYLIST_ITEM))).toEqual(normalizeQqCollection(PLAYLIST_ITEM));
         expect(normalizeQqCollection({ id: 8, title: '收藏歌单', picurl: 'https://img.example.test/fav.jpg', songnum: 3 })).toEqual({
@@ -826,6 +834,29 @@ describe('qqProvider', () => {
 
         expect(favourite.providerData).not.toHaveProperty('owned');
         await qqProvider.catalog!.getPlaylistTracks!(7009600126, 50, 0, favourite);
+        expect(requestMock.mock.calls.map(call => call[0])).toEqual(['song_list_detail']);
+    });
+
+    // 3.1.4 起，后端带会话时用凭据重读匿名 CGI 回 `code: 10` 的官方算法歌单，改写成同样的 `cdlist[0]`；
+    // `/user/playlist` 的收藏条目也补上了 `bigpicUrl`（官方歌单是第一首歌的专辑图）。
+    it('reads an official algorithmic playlist through the credential-backed song_list_detail', async () => {
+        const cover = 'https://y.gtimg.cn/music/photo_new/T002R300x300M0000016l2F430zMux.jpg?max_age=2592000';
+        requestMock.mockResolvedValue({
+            response: {
+                code: 0, subcode: 0, cdnum: 1, realcdnum: 1,
+                cdlist: [{ disstid: '211111', dissname: '百万收藏', logo: cover, songnum: 50, total_song_num: 50, songlist: [SEARCH_ITEM] }],
+            },
+        });
+        const official = normalizeQqCollection({
+            tid: 211111, dirId: 0, name: '百万收藏', songnum: 50, dirShow: 1, dirType: 3, logo: '', bigpicUrl: cover, picUrl: cover,
+        });
+
+        expect(official.coverUrl).toBeTruthy();
+        expect(official.providerData).not.toHaveProperty('owned');
+        await expect(qqProvider.catalog!.getPlaylistTracks!(211111, 50, 0, official)).resolves.toMatchObject({
+            items: [expect.objectContaining({ qqMid: '003rJSwm3TechU' })],
+            total: 50,
+        });
         expect(requestMock.mock.calls.map(call => call[0])).toEqual(['song_list_detail']);
     });
 

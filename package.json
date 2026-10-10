@@ -8,7 +8,7 @@
     "email": "chthollyphile@users.noreply.github.com"
   },
   "private": true,
-  "version": "0.7.15-android.92",
+  "version": "0.7.17-android.93",
   "license": "AGPL-3.0",
   "type": "module",
   "engines": {
@@ -40,6 +40,7 @@
     "probe:netease-xeapi": "node test/manual/netease_xeapi_probe.cjs",
     "manual:visualizer-memory": "node test/manual/visualizer-memory-probe.mjs",
     "manual:lattice-cover-memory": "node test/manual/lattice-cover-memory.mjs",
+    "manual:bravais-perf": "node test/manual/bravais-perf-probe.mjs",
     "stage:client": "vite --open /stage-client.html",
     "contributors:add": "npx all-contributors-cli add",
     "contributors:generate": "npx all-contributors-cli generate"
@@ -51,6 +52,8 @@
     "@capacitor/splash-screen": "^8.0.2",
     "@capacitor/status-bar": "^8.0.3",
     "@neteasecloudmusicapienhanced/api": "^4.41.1",
+    "@xhayper/discord-rpc": "^1.5.1",
+    "@yakult-green-tea/qq-music-api": "3.1.4",
     "axios": "^1.20.0",
     "bodian-music-api": "0.1.2",
     "fflate": "^0.8.3",

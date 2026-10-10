@@ -11,6 +11,7 @@ import { getSongCoverUrl } from '../../../../services/onlineMusic/songMetadata';
 import { colorWithAlpha } from '../../../../components/visualizer/colorMix';
 import { useFoliaHexViewport } from '../shared/useFoliaHexViewport';
 import { PolaroidCard, type GridItem } from '../shared/PolaroidCard';
+import type { GridPlaybackMark } from '../shared/useGridStayPlayback';
 import { squareGridCardBox } from '../shared/gridCardLayout';
 import {
     gridViewStateStorageKey,
@@ -83,6 +84,8 @@ interface GridViewProps {
     onSelectTrack?: (track: SongResult, queue: SongResult[]) => void;
     onSelectCollection?: (item: any) => void;
     onAddTrackToQueue?: (track: SongResult) => void;
+    /** fb3：「留在原处」时正在播放的那首的卡片画成暂停 / 继续（useGridStayPlayback.markFor）；不给就是普通的播放键。 */
+    trackPlaybackMark?: (track: SongResult | undefined) => GridPlaybackMark | null;
     isLoading?: boolean;
     theme: Theme;
     isDaylight: boolean;
@@ -242,6 +245,7 @@ export const GridView: React.FC<GridViewProps> = ({
     onSelectTrack,
     onSelectCollection,
     onAddTrackToQueue,
+    trackPlaybackMark,
     isLoading = false,
     theme,
     isDaylight,
@@ -1182,6 +1186,7 @@ export const GridView: React.FC<GridViewProps> = ({
                                     }
                                 }}
                                 isFocused={idx === focusedIndex}
+                                playbackMark={mode === 'tracks' ? trackPlaybackMark?.(item.rawTrack) ?? null : null}
                             />
                         </div>
                         <div
@@ -1220,6 +1225,7 @@ export const GridView: React.FC<GridViewProps> = ({
         onSelectArtist,
         onSelectAlbum,
         onAddTrackToQueue,
+        trackPlaybackMark,
         canMatchSong,
         mutations,
         handleRemoveTrack,
