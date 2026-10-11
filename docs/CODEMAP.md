@@ -21,9 +21,9 @@
 | hooks | 64+ |
 | src (其他) | 64+ |
 | stores | 32+ |
+| 其他 | 32+ |
 | types | 16+ |
 | backend/electron | 8+ |
-| 其他 | 8+ |
 | i18n | 4+ |
 | workers | 2+ |
 
