@@ -2,6 +2,7 @@ import { weapiRequest, UA } from './weapi.js';
 import { eapiRequest } from './eapi.js';
 import { getNeteaseCookie, hasNeteaseLogin, parseCookieString, saveProviderCookie, setBrowserCookies, getNeteaseMusicU } from './cookies.js';
 import { handleQQSongComments } from './qq.js';
+import { noteQrLoginStep, resetQrLoginTrace } from './qrLoginTrace.js';
 
 const HOME_FEATURED_REVIEW_FALLBACKS = [
   { provider: 'netease', source: 'netease', type: 'song', id: 190137, name: '七月上', artist: 'Jam' },
@@ -1082,26 +1083,87 @@ async function neteaseQrEapi(path, data) {
   };
 }
 
-export async function handleLoginQrKey() {
-  let body = {};
+/**
+ * eapiRequest has no timeout of its own, so a slow upstream parks the QR modal on "loading" with a
+ * report that only shows `start`. Bound the two QR calls here so the wait always ends in either a
+ * key or a message the user can act on.
+ */
+const NETEASE_QR_TIMEOUT_MS = 10000;
+
+const withNeteaseQrTimeout = (promise, label, timeoutMs = NETEASE_QR_TIMEOUT_MS) => new Promise((resolve, reject) => {
+  const timer = setTimeout(() => {
+    reject(new Error(`${label}超时（${Math.round(timeoutMs / 1000)} 秒）`));
+  }, timeoutMs);
+  promise.then(
+    (value) => { clearTimeout(timer); resolve(value); },
+    (error) => { clearTimeout(timer); reject(error); },
+  );
+});
+
+/**
+ * The QR bitmap is fetched through the bridge's own fetch instead of handing `<img>` a third-party
+ * URL: on Android that request is proxied by the native client, and the caller gets a self-contained
+ * data URL that cannot end up as a broken image in the WebView. Returns '' when it cannot be
+ * inlined, and the caller falls back to the remote URL.
+ */
+async function neteaseQrImageDataUrl(src) {
   try {
-    // type:3 is the eapi / App QR key type (verified working)
-    ({ body } = await neteaseQrEapi('/api/login/qrcode/unikey', { type: 3 }));
-  } catch (err) {
-    throw new Error((err && err.message) || '获取二维码 key 失败');
+    const response = await withNeteaseQrTimeout(fetch(src), '获取二维码图片', 8000);
+    if (!response || !response.ok) return '';
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (!bytes.length) return '';
+    let binary = '';
+    const chunk = 0x8000;
+    for (let index = 0; index < bytes.length; index += chunk) {
+      binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
+    }
+    return `data:image/png;base64,${btoa(binary)}`;
+  } catch (_) {
+    return '';
   }
-  const key = body.unikey || body.uniKey || (body.data && (body.data.unikey || body.data.uniKey)) || '';
-  if (!key) {
+}
+
+export async function handleLoginQrKey() {
+  // A new session always starts here, so this is also where the per-session step trace resets.
+  resetQrLoginTrace();
+  noteQrLoginStep('ne:qr:key:start');
+  let lastError = null;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const startedAt = Date.now();
+    let body = {};
+    try {
+      // type:3 is the eapi / App QR key type (verified working)
+      ({ body } = await withNeteaseQrTimeout(
+        neteaseQrEapi('/api/login/qrcode/unikey', { type: 3 }),
+        '获取二维码 key',
+      ));
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err || '获取二维码 key 失败'));
+      noteQrLoginStep('ne:qr:key:error', { attempt, message: lastError.message });
+      continue;
+    }
+    const key = body.unikey || body.uniKey || (body.data && (body.data.unikey || body.data.uniKey)) || '';
+    if (key) {
+      noteQrLoginStep('ne:qr:key:ok', { attempt, ms: Date.now() - startedAt });
+      return { key, unikey: key, code: Number(body.code) || 200 };
+    }
+    // 空 key 多半是风控 / 上游抖了一下：再要一次，第二次仍然空才报出来。
     const hint = body.message || body.msg || (body.code != null ? `code=${body.code}` : 'empty body');
-    throw new Error(`获取二维码 key 失败（${hint}）`);
+    lastError = new Error(`获取二维码 key 失败（${hint}）`);
+    noteQrLoginStep('ne:qr:key:empty', { attempt, code: Number(body.code) || 0, hint });
   }
-  return { key, unikey: key, code: Number(body.code) || 200 };
+  noteQrLoginStep('ne:qr:key:failed', { message: lastError ? lastError.message : '获取二维码 key 失败' });
+  throw lastError || new Error('获取二维码 key 失败');
 }
 
 export async function handleLoginQrCreate(key) {
   if (!key) throw new Error('缺少二维码 key');
   const url = buildLoginQrUrl(key);
-  const img = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=0&data=${encodeURIComponent(url)}`;
+  const remote = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=0&data=${encodeURIComponent(url)}`;
+  noteQrLoginStep('ne:qr:create:start');
+  const inline = await neteaseQrImageDataUrl(remote);
+  noteQrLoginStep(inline ? 'ne:qr:create:ok' : 'ne:qr:create:fallback');
+  const img = inline || remote;
   return { img, qrimg: img, url };
 }
 
@@ -1115,6 +1177,7 @@ export async function handleLoginQrCheck(key) {
     body = raw.body || {};
     setCookies = raw.setCookies || [];
   } catch (err) {
+    noteQrLoginStep('ne:qr:check:error', { message: err && err.message ? err.message : String(err) });
     return {
       code: 801,
       error: err && err.message ? err.message : '扫码状态查询失败',
@@ -1123,6 +1186,14 @@ export async function handleLoginQrCheck(key) {
     };
   }
   const code = Number(body.code || 0);
+  // 801 是「还没扫」，一轮轮地写会把追踪刷满；其余状态（已扫、过期、确认、风控）都要留下。
+  if (code !== 801) {
+    noteQrLoginStep('ne:qr:check', {
+      code,
+      hasCookie: Boolean(body.cookie),
+      setCookieCount: setCookies.length,
+    });
+  }
   const profile = body.profile || (body.data && body.data.profile) || {};
   let cookieText = '';
   if (Array.isArray(body.cookie)) cookieText = body.cookie.filter(Boolean).join('; ');

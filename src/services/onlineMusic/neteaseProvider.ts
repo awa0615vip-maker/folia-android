@@ -20,6 +20,7 @@ import { getNeteaseRemoteApiBase, isSongMarkedUnavailable, neteaseApi } from '..
 import { readProviderSessionValue, writeProviderSessionValue } from './providerStorage';
 import { collectLoginBackendDiagnostics } from './loginBackendDiagnostics';
 import { canRunLoginSelfCheck, runLoginSelfCheck } from './loginSelfCheck';
+import { getQrLoginTraceLines } from '../../nativeBridge/api/qrLoginTrace.js';
 import { formatDiagnosticClock } from '../../utils/qrLoginDiagnosticReport';
 import { proxyNativeRemoteAudioUrl } from '../nativeRemoteAudio';
 import { notePlaybackStreamInfo } from '../../utils/mediaDiagnostics';
@@ -480,10 +481,15 @@ export const neteaseProvider: OnlineMusicProvider = {
             }
         },
         async getQrLoginDiagnostics() {
-            return collectLoginBackendDiagnostics('netease', [
+            const sessionLines = [
                 `session: login cookie=${yesNo(Boolean(readProviderSessionValue('netease', 'cookie', ['netease_cookie'])))}, anonymous cookie=${yesNo(Boolean(readProviderSessionValue('netease', 'anonymous_cookie', ['netease_anonymous_cookie'])))}`,
                 `last account check: ${lastLoginStatusCheck ?? 'none'}`,
-            ], getNeteaseRemoteApiBase());
+            ];
+            // 内置桥（安卓）在同一条链路里跑：要码 / 生成二维码 / 轮询分别走到哪一步、上游回了什么，
+            // 只有桥侧的分步追踪说得清（桌面版这条追踪在扩展侧，这里为空）。
+            const bridgeTrace = getQrLoginTraceLines('netease');
+            if (bridgeTrace.length) sessionLines.push(...bridgeTrace);
+            return collectLoginBackendDiagnostics('netease', sessionLines, getNeteaseRemoteApiBase());
         },
         canRunQrLoginSelfCheck: () => canRunLoginSelfCheck(getNeteaseRemoteApiBase()),
         runQrLoginSelfCheck: () => runLoginSelfCheck('netease', getNeteaseRemoteApiBase()),
