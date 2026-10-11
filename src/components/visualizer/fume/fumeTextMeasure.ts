@@ -10,6 +10,16 @@ import { measurePrefixOffsets, rememberBounded } from '../textMeasureCache';
 
 const FUME_PRETEXT_OPTIONS = { whiteSpace: 'pre-wrap' } satisfies PrepareOptions;
 
+/**
+ * Binary-search depth for one line's font size. The render pass wants the exact largest size that
+ * still keeps the line on a single row; the measure-only passes that choose the density scale only
+ * need a height estimate, so they stop earlier. Both are counted in prepare+layout calls per line,
+ * and the whole layout search runs dozens of those, which is what made one build a 1s main-thread
+ * block on a phone.
+ */
+export const FUME_FONT_SEARCH_ITERATIONS = 8;
+export const FUME_FONT_SEARCH_ITERATIONS_MEASURE = 3;
+
 export const buildSegmentMetas = (prepared: PreparedTextWithSegments) => {
     const segmentMetas: SegmentMeta[] = [];
     const graphemes: string[] = [];
@@ -246,6 +256,7 @@ export const buildPreparedSingleLine = (
     densityScale: number,
     heroScale: number,
     theme: Pick<Theme, 'fontWeight'>,
+    iterations = FUME_FONT_SEARCH_ITERATIONS,
 ) => {
     let low = variant === 'hero' ? 18 : 10;
     let high = variant === 'hero' ? 58 : 30;
@@ -257,7 +268,7 @@ export const buildPreparedSingleLine = (
 
     // Fume really wants most blocks to stay single-line when possible.
     // So do a tiny binary search for a font size that still fits before falling back.
-    for (let iteration = 0; iteration < 8; iteration += 1) {
+    for (let iteration = 0; iteration < iterations; iteration += 1) {
         const candidateFontPx = ((low + high) / 2)
             * lyricsFontScale
             * densityScale

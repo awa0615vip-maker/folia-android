@@ -4,7 +4,7 @@ import { getLineRenderEndTime } from '../../../utils/lyrics/renderHints';
 import type { FumeArticleLayout, FumeArticleLayoutMetrics, FumeBlock, FumeLayoutAttemptOptions, FumeLayoutAttemptTiming, ViewportSize } from './fumeTypes';
 import { clamp, hashString, seeded, splitGraphemes } from './fumeMath';
 import { buildWordRangesFromWords } from './fumeReveal';
-import { buildFontSpec, buildGlyphOffsets, buildPreparedSingleLine, buildRenderSegments, buildSegmentMetas, buildWordRangeIndexByOffset, countRenderableGraphemes, cursorToGlobalOffset } from './fumeTextMeasure';
+import { buildFontSpec, buildGlyphOffsets, buildPreparedSingleLine, buildRenderSegments, buildSegmentMetas, buildWordRangeIndexByOffset, countRenderableGraphemes, cursorToGlobalOffset, FUME_FONT_SEARCH_ITERATIONS, FUME_FONT_SEARCH_ITERATIONS_MEASURE } from './fumeTextMeasure';
 
 // src/components/visualizer/fume/fumeArticleLayout.ts
 // Builds the fume article: picks block variants and font sizes and lays every lyric line out on the page.
@@ -23,6 +23,13 @@ const createFumeLayoutTiming = (): FumeLayoutAttemptTiming => ({
 });
 
 const roundMs = (value: number) => Number(value.toFixed(2));
+
+/**
+ * Density-search depth per column count. The search only picks which sampled density lands closest
+ * to the target article height; 5 steps resolve the scale to ~0.02, which the eye cannot separate,
+ * and every step costs one full measure pass over every lyric line.
+ */
+const DENSITY_SEARCH_ITERATIONS = 5;
 
 const chooseNaturalBlockVariant = (line: Line, index: number, total: number) => {
     const graphemeCount = countRenderableGraphemes(line.fullText);
@@ -257,6 +264,7 @@ function buildArticleLayoutAttempt(
             densityScale,
             fumeTuning.heroScale,
             layoutTheme,
+            shouldBuildRenderDetails ? FUME_FONT_SEARCH_ITERATIONS : FUME_FONT_SEARCH_ITERATIONS_MEASURE,
         );
         if (timing) {
             timing.prepareLayoutMs += nowMs() - prepareLayoutStart;
@@ -481,7 +489,7 @@ export const buildArticleLayout = (
         const columnTiming = createFumeLayoutTiming();
         measureColumnTimings.set(columns, columnTiming);
 
-        for (let iteration = 0; iteration < 8; iteration += 1) {
+        for (let iteration = 0; iteration < DENSITY_SEARCH_ITERATIONS; iteration += 1) {
             const densityScale = (low + high) / 2;
             measureAttemptCount += 1;
             const attemptOptions: FumeLayoutAttemptOptions & { mode: 'measure' } = {
