@@ -7,7 +7,7 @@ import { useReducedMotionFor } from '../../../hooks/useReducedMotionFor';
 import { useLatticeSettingsStore } from '../../../stores/useLatticeSettingsStore';
 import { useLibraryWallLookStore } from '../../../stores/useLibraryWallLookStore';
 import type { LibrarySuiteStageProps } from '../../core/contracts/suite';
-import { BRAVAIS_METRICS, BRAVAIS_OVERSCAN, BRAVAIS_SEAM_ACRYLIC_BLUR } from './bravaisConstants';
+import { BRAVAIS_METRICS, BRAVAIS_SEAM_ACRYLIC_BLUR } from './bravaisConstants';
 import { WALL_REFLOW_CONTROLS_REVEAL } from '../../../components/wall/wallReflowMotion';
 import { resolveSlotItem, type BravaisDisplay } from './bravaisDisplay';
 import type { BravaisLayer } from './bravaisLayer';
@@ -85,6 +85,9 @@ const expandBounds = (bounds: { left: number; right: number; top: number; bottom
     top: bounds.top - by,
     bottom: bounds.bottom + by,
 });
+
+// 全量渲染：收集范围放宽到远超整面墙，所有卡片一次性挂载，滑动到任何位置都不再露白。
+const BRAVAIS_FULL_RENDER = 100000;
 
 /**
  * 海报的取色来源（bravaisPosterPalette）：歌手页从这位歌手最火的三张专辑封面取；专辑页从这张专辑的封面取（专辑里有
@@ -227,7 +230,7 @@ const BravaisStage: React.FC<LibrarySuiteStageProps> = ({
     }, [camera.moveTo, frameRef, view]);
 
     const slots = useMemo<readonly WallSlot[]>(() => (
-        camera.bounds ? collectWallSlots(expandBounds(camera.bounds, BRAVAIS_OVERSCAN), BRAVAIS_METRICS, FLIP_MAX_TILES) : []
+        camera.bounds ? collectWallSlots(expandBounds(camera.bounds, BRAVAIS_FULL_RENDER), BRAVAIS_METRICS, FLIP_MAX_TILES) : []
     ), [camera.bounds]);
     const slotsRef = useRef(slots);
     slotsRef.current = slots;

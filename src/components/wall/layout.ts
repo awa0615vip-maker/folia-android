@@ -75,8 +75,9 @@ export const toBounds = (tile: Omit<ReflowTile, 'instanceId'>): Bounds => ({
 // horizontally, which reads as stripes; a mild landscape bias keeps the recurrence even.
 const FIELD_ASPECT = 2.2;
 
-// Ceiling on posters built for one viewport, so an extreme zoom-out cannot stall a frame.
-export const MAX_RENDERED_INSTANCES = 400;
+// 全量渲染上限：一次性挂载整面墙所有卡片（用户要求滑动/缩放零露白）。保留一个安全顶，
+// 防止极端缩小或异常数据导致无限铺建；普通歌单 / 曲库规模都远低于此值。
+export const MAX_RENDERED_INSTANCES = 3000;
 
 export const getPitch = (metrics: WallMetrics) => metrics.cellSize + metrics.gap;
 

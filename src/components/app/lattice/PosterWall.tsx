@@ -110,10 +110,11 @@ export default function PosterWall({
         ? Math.min(cameraScale * devicePixelRatio, 1)
         : cameraScale * devicePixelRatio;
     // 相机行程（见 clampFiniteCamera）与裁剪余量都跟着收窄：性能优先时不再无限铺下去。
-    const overscan = performanceMode ? PERFORMANCE_OVERSCAN : OVERSCAN;
     const reservedViewports = performanceMode ? 1 : MAX_RESERVED_VIEWPORTS;
 
     const geometry = useMemo(() => getLatticeGeometry(tiles.length, METRICS), [tiles.length]);
+    // 全量渲染：裁剪余量直接放宽到整面墙尺寸，所有卡片一次性挂载，滑动 / 缩放到任何位置都不再露白。
+    const overscan = Math.max(geometry.cellWidth, geometry.cellHeight, OVERSCAN);
     const [activePoster, setActivePoster] = useLatticePosterSelection(tiles, geometry, METRICS);
 
     const publishCurrentPosterVisibility = useCallback((camera: LatticeCamera) => {
@@ -300,6 +301,7 @@ export default function PosterWall({
         cameraRef,
         getWorldBounds,
         viewportRef,
+        enablePinch: true,
     });
 
     // Only the block holding the open card is re-geared; every other poster keeps its base rect.

@@ -12,6 +12,10 @@ import { createWallWheelClassifier, stepWallWheel, wallWheelDelta, WALL_PAN_INER
 
 const DRAG_THRESHOLD_PX = 7;
 const CULL_EDGE_MARGIN_PX = 180;
+// 双指捏合缩放的范围：小于初始 0.52 能缩小看整面墙，放大到 2.4 倍能看清卡片细节。
+const MIN_PINCH_SCALE = 0.26;
+const MAX_PINCH_SCALE = 2.4;
+const clampPinchScale = (scale: number) => Math.min(MAX_PINCH_SCALE, Math.max(MIN_PINCH_SCALE, scale));
 // 两下 wheel 之间隔得比这短就算同一次手势（触控板 / 惯性约 16ms 一下；停手再滚是新手势，按光标下面的东西重新算）。
 const WHEEL_LATCH_MS = 160;
 // 锁定期间光标挪开超过这么多才算换了目标（墙在光标下滑动时浏览器补发的 pointermove 坐标不变）。
@@ -33,11 +37,16 @@ type WallPointerPanOptions = {
     cameraRef: MutableRefObject<LatticeCamera>;
     getWorldBounds: (camera: LatticeCamera, viewport: { width: number; height: number }) => Bounds;
     viewportRef: MutableRefObject<{ width: number; height: number }>;
+    /**
+     * 是否启用双指捏合缩放。Lattice 的相机 scale 是可变的，可直接缩放；Bravais 的 scale
+     * 由视图固定（相机只平移），需要由宿主自己的缩放模型支持，暂不启用。
+     */
+    enablePinch?: boolean;
 };
 
 export const useWallPointerPan = ({
     applyCamera, animationRef, stopPan, containerRef, reducedMotion, overscan, clampCamera,
-    bounds, cameraRef, getWorldBounds, viewportRef,
+    bounds, cameraRef, getWorldBounds, viewportRef, enablePinch = false,
 }: WallPointerPanOptions) => {
     const boundsRef = useRef(bounds);
     boundsRef.current = bounds;
@@ -55,6 +64,15 @@ export const useWallPointerPan = ({
     } | null>(null);
     // Read by the poster click handler so a drag that ends on a card does not open it.
     const didDragRef = useRef(false);
+
+    // 所有按下中的指针（单指 / 双指都在这里）；双指时用 pinchRef 驱动捏合缩放。
+    const pointersRef = useRef(new Map<number, { x: number; y: number }>());
+    const pinchRef = useRef<{
+        startDist: number;
+        startScale: number;
+        // 手势开始时两指中点所对应的世界坐标，缩放全过程让它钉在当前两指中点下（同时支持捏合+拖动）。
+        anchor: { x: number; y: number };
+    } | null>(null);
 
     // Republishing bounds is what triggers a re-cull, so only do it near the edge of what is culled.
     const updateCamera = useCallback((x: number, y: number) => {
@@ -74,14 +92,65 @@ export const useWallPointerPan = ({
         stopPan();
     }, [stopPan]);
 
+    // 双指捏合：按距离比对起始缩放，同时让起始中点对应的世界锚点始终钉在当前两指中点下。
+    const applyPinch = useCallback((mid: { x: number; y: number }, dist: number) => {
+        const pinch = pinchRef.current;
+        if (!pinch) return;
+        const scale = clampPinchScale((pinch.startScale * dist) / pinch.startDist);
+        const requested = {
+            x: mid.x - pinch.anchor.x * scale,
+            y: mid.y - pinch.anchor.y * scale,
+            scale,
+        };
+        const next = clampCameraRef.current ? clampCameraRef.current(requested) : requested;
+        applyCamera(next, true);
+    }, [applyCamera]);
+
+    // 从当前按下的两根手指计算中点与距离。
+    const currentPinch = useCallback(() => {
+        const pts = [...pointersRef.current.values()];
+        if (pts.length < 2) return null;
+        const [p1, p2] = pts;
+        return {
+            mid: { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 },
+            dist: Math.max(1, Math.hypot(p2.x - p1.x, p2.y - p1.y)),
+        };
+    }, []);
+
     const onPointerDown = useCallback((event: PointerEvent<HTMLDivElement>) => {
-        if (event.button !== 0 || !event.isPrimary || pointerRef.current) return;
-        interrupt();
-        didDragRef.current = false;
+        if (event.button !== 0) return;
         // Panning stays available while a card is open, but a drag that starts on the open card
         // belongs to its own controls - the progress bar seeks by dragging.
         // Only actual controls are excluded; the cover, title and surrounding space can pan.
         if (event.target instanceof Element && event.target.closest('button, input, select, textarea, a, [contenteditable="true"], [role="slider"]')) return;
+        pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+        interrupt();
+
+        if (pointersRef.current.size >= 2) {
+            if (!enablePinch) return;
+            // 第二指落下：终止单指平移，对两根手指都捕获事件，进入捏合缩放。
+            for (const id of pointersRef.current.keys()) {
+                try { event.currentTarget.setPointerCapture(id); } catch { /* already captured */ }
+            }
+            const pinching = currentPinch();
+            if (pinching) {
+                pointerRef.current = null;
+                const cam = cameraRef.current;
+                pinchRef.current = {
+                    startDist: pinching.dist,
+                    startScale: cam.scale,
+                    anchor: {
+                        x: (pinching.mid.x - cam.x) / cam.scale,
+                        y: (pinching.mid.y - cam.y) / cam.scale,
+                    },
+                };
+            }
+            didDragRef.current = true;
+            return;
+        }
+
+        // 单指：原有平移。
+        didDragRef.current = false;
         pointerRef.current = {
             id: event.pointerId,
             start: { x: event.clientX, y: event.clientY },
@@ -89,9 +158,19 @@ export const useWallPointerPan = ({
             last: { x: event.clientX, y: event.clientY, time: event.timeStamp },
             vx: 0, vy: 0, dragged: false,
         };
-    }, [cameraRef, interrupt]);
+    }, [cameraRef, currentPinch, enablePinch, interrupt]);
 
     const onPointerMove = useCallback((event: PointerEvent<HTMLDivElement>) => {
+        if (!pointersRef.current.has(event.pointerId)) return;
+        pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+        // 双指捏合优先：距离控制缩放，中点控制锚点（可一边捏一边拖）。
+        if (pinchRef.current && pointersRef.current.size >= 2) {
+            const pinching = currentPinch();
+            if (pinching) applyPinch(pinching.mid, pinching.dist);
+            return;
+        }
+
         const pointer = pointerRef.current;
         if (!pointer || pointer.id !== event.pointerId) return;
         const dx = event.clientX - pointer.start.x;
@@ -108,14 +187,26 @@ export const useWallPointerPan = ({
         }
         pointer.last = { x: event.clientX, y: event.clientY, time: event.timeStamp };
         if (pointer.dragged) updateCamera(pointer.camera.x + dx, pointer.camera.y + dy);
-    }, [updateCamera]);
+    }, [applyPinch, currentPinch, updateCamera]);
 
     // Continue along the release velocity; stale samples and cancelled gestures never coast.
     const onPointerUp = useCallback((event: PointerEvent<HTMLDivElement>) => {
+        if (!pointersRef.current.has(event.pointerId)) return;
+        pointersRef.current.delete(event.pointerId);
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+
+        // 从捏合中松手：两指全部离开才结束，剩余手指不接管平移（重新按下即可），避免跳变。
+        if (pinchRef.current) {
+            if (pointersRef.current.size < 2) {
+                pinchRef.current = null;
+                pointerRef.current = null;
+            }
+            return;
+        }
+
         const pointer = pointerRef.current;
         if (!pointer || pointer.id !== event.pointerId) return;
         pointerRef.current = null;
-        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
         if (!pointer.dragged || reducedMotion || event.timeStamp - pointer.last.time > WALL_PAN_INERTIA.staleReleaseMs) return;
         const speed = Math.hypot(pointer.vx, pointer.vy);
         if (speed < WALL_PAN_INERTIA.minSpeed) return;
@@ -129,8 +220,10 @@ export const useWallPointerPan = ({
     }, [animationRef, cameraRef, reducedMotion, updateCamera]);
 
     const onPointerCancel = useCallback((event: PointerEvent<HTMLDivElement>) => {
-        if (pointerRef.current?.id !== event.pointerId) return;
-        pointerRef.current = null;
+        if (!pointersRef.current.has(event.pointerId)) return;
+        pointersRef.current.delete(event.pointerId);
+        if (pointersRef.current.size < 2) pinchRef.current = null;
+        if (pointerRef.current?.id === event.pointerId) pointerRef.current = null;
         interrupt();
     }, [interrupt]);
 
@@ -251,14 +344,18 @@ export const useWallPointerPan = ({
             wheel.pending = { x: wheel.pending.x - dx, y: wheel.pending.y - dy };
             if (wheel.frame === null) wheel.frame = requestAnimationFrame(tick);
         };
-        const cancel = () => { pointerRef.current = null; interrupt(); };
+        const cancel = () => { pointersRef.current.clear(); pinchRef.current = null; pointerRef.current = null; interrupt(); };
         // 只按修饰键（按住 Shift 横向滚动时 Shift 会自动重复 keydown）不算键盘输入，不打断平滑滚动。
         const onKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Shift' || event.key === 'Control' || event.key === 'Alt' || event.key === 'Meta') return;
             cancel();
         };
         const endOutside = (event: globalThis.PointerEvent) => {
-            if (pointerRef.current?.id === event.pointerId) cancel();
+            if (pointersRef.current.has(event.pointerId)) {
+                pointersRef.current.delete(event.pointerId);
+                if (pointersRef.current.size < 2) pinchRef.current = null;
+                if (pointerRef.current?.id === event.pointerId) cancel();
+            }
         };
         window.addEventListener('pointerup', endOutside);
         window.addEventListener('pointercancel', endOutside);
