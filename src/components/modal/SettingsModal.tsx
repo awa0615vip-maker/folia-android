@@ -36,7 +36,7 @@ import ReleaseNotesDialog from './ReleaseNotesDialog';
 import { JoinCommunityButton } from '../shared/JoinCommunityButton';
 import { copyTextToClipboard } from '../../utils/clipboard';
 import { BUILD_KIND_TAGS, getBuildKind } from '../../utils/buildProvenance';
-import meowImageUrl from '../../../build/miao.png';
+import meowImageUrl from '../../../assets/miao.png';
 import type { LyricData } from '../../types';
 import { type SettingsModalState, type SettingsSubviewId, type VisualizerSettingsSection } from '../../stores/useSettingsModalStore';
 import { SettingsAnchorProvider, useSettingsAnchorList, useSettingsAnchorStore } from './settings/navigation/SettingsAnchorContext';

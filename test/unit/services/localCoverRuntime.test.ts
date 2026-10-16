@@ -1,16 +1,8 @@
-<<<<<<< HEAD
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  waitForLocalCoverServiceWorkerReady,
-  waitForLocalCoverServiceWorkerRegistration,
-} from '../../../src/services/localCoverRuntime';
-=======
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initializeLocalCoverRuntime } from '../../../src/services/localCoverRuntime';
 import { isLocalCoverWebRuntimeSupported } from '../../../src/services/localCoverBinaryStore';
 import { migrateLegacyLocalCoverAssetsInBackground } from '../../../src/services/localCoverAssetService';
->>>>>>> upstream/main
 
 // test/unit/services/localCoverRuntime.test.ts
 // Verifies local-cover startup never waits on a service worker and re-requests covers once one takes control.
@@ -93,19 +85,5 @@ describe('local cover runtime', () => {
     // Removed, then set back: the browser only re-requests an image whose src actually changes.
     expect(previousSources).toEqual([COVER_URL, null]);
     expect(broken.getAttribute('src')).toBe(COVER_URL);
-  });
-
-  it('rejects with a timeout error when registration never settles', async () => {
-    vi.useFakeTimers();
-    const waiting = waitForLocalCoverServiceWorkerRegistration(
-      new Promise<ServiceWorkerRegistration>(() => undefined),
-      50,
-    );
-    const assertion = expect(waiting).rejects.toThrow(
-      'Local cover service worker registration timed out after 50ms.',
-    );
-
-    await vi.advanceTimersByTimeAsync(50);
-    await assertion;
   });
 });
