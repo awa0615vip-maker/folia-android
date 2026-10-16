@@ -22,3 +22,17 @@ export const isSecondaryModifierPressed = (event: KeyboardEvent): boolean => (
 
 /** Label for the primary modifier, for shortcut hints shown in the UI. */
 export const PRIMARY_MODIFIER_LABEL = isMacPlatform ? 'Cmd' : 'Ctrl';
+
+/**
+ * Is the UI running inside the Folia Android native shell (Capacitor WebView), rather than a
+ * desktop browser / Electron? Used to pick phone-friendly rendering defaults (MSAA off, capped
+ * frame rate / DPR). The app never ships a browser build on this platform, but keeping this a
+ * capability probe (not a build flag) lets the same bundle run unchanged in a desktop browser.
+ */
+export const isAndroidNativeRuntime = (): boolean => (
+    typeof window !== 'undefined'
+    && (window as unknown as { Capacitor?: { getPlatform?: () => string } })?.Capacitor?.getPlatform?.() === 'android'
+);
+
+/** Evaluated once at module load: mobile renderers read this to avoid re-probing every frame. */
+export const IS_ANDROID_WEBVIEW = isAndroidNativeRuntime();

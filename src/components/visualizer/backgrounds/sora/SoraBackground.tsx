@@ -144,10 +144,13 @@ const SoraBackground: React.FC<SoraBackgroundProps> = ({ theme, isDaylight, paus
     let lastTimestamp = performance.now();
 
     const render = (now: number) => {
-      if (!pausedRef.current) {
-        const delta = (now - lastTimestamp) / 1000;
-        timeRef.current += delta;
+      if (pausedRef.current) {
+        // 暂停时画面静止：跳过全部 GL 清屏/绘制（最昂贵的部分），只保留轻量 rAF 以便恢复播放时无缝续帧。
+        animationRef.current = requestAnimationFrame(render);
+        return;
       }
+      const delta = (now - lastTimestamp) / 1000;
+      timeRef.current += delta;
       lastTimestamp = now;
 
       twgl.resizeCanvasToDisplaySize(canvas);

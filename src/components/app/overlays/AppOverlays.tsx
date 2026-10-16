@@ -1,10 +1,11 @@
 import React from 'react';
 import FloatingPlayerControls from '../../FloatingPlayerControls';
-import SearchWorkspace from '../search/SearchWorkspace';
-import DevDebugOverlay from '../../DevDebugOverlay';
-import MemoryMonitorWindow from '../../debug/MemoryMonitorWindow';
 import NowPlayingToast from './NowPlayingToast';
 import BottomCommandPaletteButton from './BottomCommandPaletteButton';
+// 性能：搜索工作区、调试覆盖层、内存监视器都是按需打开的重型面板，懒加载，不进入首屏闭包。
+const SearchWorkspace = React.lazy(() => import('../search/SearchWorkspace'));
+const DevDebugOverlay = React.lazy(() => import('../../DevDebugOverlay'));
+const MemoryMonitorWindow = React.lazy(() => import('../../debug/MemoryMonitorWindow'));
 import type { AppOverlaysModel } from './buildAppOverlaysModel';
 import { countRender } from '../../../dev/renderCount';
 import { useLatticeControlsStore } from '../../../stores/useLatticeControlsStore';
@@ -27,11 +28,23 @@ const AppOverlays: React.FC<AppOverlaysProps> = ({ model }) => {
 
     return (
         <>
-            {searchOverlay && <SearchWorkspace {...searchOverlay} />}
+            {searchOverlay && (
+                <React.Suspense fallback={null}>
+                    <SearchWorkspace {...searchOverlay} />
+                </React.Suspense>
+            )}
 
-            {debugOverlay && <DevDebugOverlay {...debugOverlay} />}
+            {debugOverlay && (
+                <React.Suspense fallback={null}>
+                    <DevDebugOverlay {...debugOverlay} />
+                </React.Suspense>
+            )}
 
-            {memoryMonitor && <MemoryMonitorWindow {...memoryMonitor} />}
+            {memoryMonitor && (
+                <React.Suspense fallback={null}>
+                    <MemoryMonitorWindow {...memoryMonitor} />
+                </React.Suspense>
+            )}
 
             {floatingControls
                 && (floatingControls.currentView !== 'lattice' || !isCurrentSongPosterVisible)

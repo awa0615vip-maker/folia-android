@@ -149,9 +149,9 @@ const GraphicsSettingsSubview: React.FC<GraphicsSettingsSubviewProps> = ({
                                 aria-label={t('options.visualizerFrameRateValue')}
                                 disabled={!isVisualizerFrameRateLimiterEnabled}
                             />
-                            <div className="grid grid-cols-3 text-[11px] font-mono opacity-50" style={{ color: 'var(--text-secondary)' }}>
+                            <div className="grid grid-cols-4 text-[11px] font-mono opacity-50" style={{ color: 'var(--text-secondary)' }}>
                                 {VISUALIZER_FRAME_RATE_OPTIONS.map((frameRate, index) => (
-                                    <span key={frameRate} className={index === 1 ? 'text-center' : index === 2 ? 'text-right' : ''}>
+                                    <span key={frameRate} className={(index === 1 || index === 2) ? 'text-center' : index === 3 ? 'text-right' : ''}>
                                         {frameRate}
                                     </span>
                                 ))}

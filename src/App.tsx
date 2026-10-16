@@ -4,7 +4,8 @@ import { useTranslation } from 'react-i18next';
 import { ChevronLeft } from 'lucide-react';
 import { loadCachedOrFetchCover } from './services/coverCache';
 import VisualizerRenderer from './components/visualizer/VisualizerRenderer';
-import CommandPalette from './components/command-palette/CommandPalette';
+// 性能：命令面板体量大、关闭时直接 return null，懒加载（首次 Ctrl+K / 点按钮唤起时才下载）。
+const CommandPalette = lazy(() => import('./components/command-palette/CommandPalette'));
 import AddToPlaylistHost from './components/app/AddToPlaylistHost';
 import { useCommandPalette } from './components/command-palette/useCommandPalette';
 import { useCommandPaletteContext } from './hooks/useCommandPaletteContext';
@@ -169,7 +170,8 @@ import { usePlayerBottomBarPositioningEntry } from './hooks/usePlayerBottomBarPo
 import { PlayerBottomBarLayoutContext } from './components/floating-player/PlayerBottomBarLayoutContext';
 import { useFoliumHostBridge } from './mods/folium/hostBridge';
 import { useFoliumHostActions } from './mods/folium/hostActions';
-import { FoliumStageLayerSlot } from './mods/folium/registries/stageLayers';
+// 性能：舞台图层（folium 舞台/墙，约 1MB）体量重，app.overlay 槽位空时不画任何内容；异步化，不阻塞首屏启动。
+const FoliumStageLayerSlot = lazy(() => import('./mods/folium/registries/stageLayers').then(m => ({ default: m.FoliumStageLayerSlot })));
 
 const LOCAL_MUSIC_UPDATED_EVENT = 'folia-local-music-updated';
 const DEV_DEBUG_SHORTCUT_LABEL = 'Alt+Shift+D';
@@ -2855,13 +2857,15 @@ export default function App() {
             <AppOverlays model={appOverlaysModel} />
 
             {/* Folium `app.overlay` stage layers: above the whole app, inert unless a layer opts in. */}
-            <FoliumStageLayerSlot
-                slot="app.overlay"
-                theme={theme}
-                isDaylight={isDaylight}
-                paused={playerState !== PlayerState.PLAYING}
-                className="fixed inset-0 pointer-events-none z-[1000]"
-            />
+            <Suspense fallback={null}>
+                <FoliumStageLayerSlot
+                    slot="app.overlay"
+                    theme={theme}
+                    isDaylight={isDaylight}
+                    paused={playerState !== PlayerState.PLAYING}
+                    className="fixed inset-0 pointer-events-none z-[1000]"
+                />
+            </Suspense>
 
             {/* Not in the overlays model: it takes no state from this file and no click from anyone.
                 Mounted whenever its own switch is on, so the lazy animejs chunk loads only when it is
@@ -2904,7 +2908,8 @@ export default function App() {
                 onCreateCurrentNavidromePlaylist={createCurrentNavidromePlaylist}
             />
 
-            <CommandPalette
+            <Suspense fallback={null}>
+                <CommandPalette
                 activeIndex={commandPalette.activeIndex}
                 activePreview={commandPalette.activePreview}
                 activeCommand={commandPalette.activeCommand}
@@ -2931,7 +2936,8 @@ export default function App() {
                 onExecutePinnedCommand={commandPalette.executePinnedCommand}
                 onQueryChange={commandPalette.setQuery}
                 onQueryCommit={commandPalette.commitQuery}
-            />
+                />
+            </Suspense>
 
             <AppDialogs model={appDialogsModel} />
             <ReleaseNotesDialog

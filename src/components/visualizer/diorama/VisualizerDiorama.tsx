@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import { DEFAULT_DIORAMA_TUNING, type Line } from '../../../types';
 import { isInterludeLine } from '../../../utils/lyrics/parserCore';
+import { IS_ANDROID_WEBVIEW } from '../../../utils/platform';
 import { useVisualizerRuntime } from '../runtime';
 import { type VisualizerSharedProps } from '../definition';
 import VisualizerShell from '../VisualizerShell';
@@ -403,7 +404,14 @@ const VisualizerDiorama: React.FC<VisualizerDioramaProps> = (props) => {
                 <Canvas
                     camera={{ position: [0, 0.6, 9], fov: 55 }}
                     dpr={[1, 2]}
-                    gl={{ alpha: true, antialias: true }}
+                    // 暂停时不再每帧空转渲染（demand 保留静止画面），播放时恢复 always。
+                    frameloop={props.paused ? 'demand' : 'always'}
+                    gl={{
+                        alpha: true,
+                        // 安卓 WebView 上全屏 MSAA 多重采样的填充率开销极大；移动端关闭（dpr≤2 已足够清晰），桌面保留。
+                        antialias: !IS_ANDROID_WEBVIEW,
+                        powerPreference: 'high-performance',
+                    }}
                     style={{ background: 'transparent' }}
                 >
                     <CameraRig

@@ -268,12 +268,19 @@ const LatentBackground: React.FC<LatentBackgroundProps> = ({
                 writeLayerStyle(meshLayerRef.current, 'transform', `scale(${1.025 + smoothedPower * 0.018})`);
             }
 
-            animationFrame = requestAnimationFrame(updateAudioResponse);
+            // 暂停时不再调度下一帧：此时 paper shader 的 speed 已为 0（其内部 GL 循环自动停帧），
+            // 连这里的逐帧 JS 归一化与 filter/transform 样式写入也一并省掉，避免手机上空转耗电。
+            if (!isPaused) {
+                animationFrame = requestAnimationFrame(updateAudioResponse);
+            }
         };
 
-        animationFrame = requestAnimationFrame(updateAudioResponse);
+        // 初始处于暂停时不启动循环；下方 effect 依赖 paused，恢复播放时会重启。
+        if (!paused) {
+            animationFrame = requestAnimationFrame(updateAudioResponse);
+        }
         return () => cancelAnimationFrame(animationFrame);
-    }, [audioBands, audioPower, showMesh, staticMode, tuning]);
+    }, [audioBands, audioPower, showMesh, staticMode, tuning, paused]);
 
     return (
         <div
