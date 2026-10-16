@@ -2,6 +2,7 @@ import type React from 'react';
 import type { LucideIcon } from 'lucide-react';
 import type { SearchReturnView, SearchSource } from '../../stores/useSearchNavigationStore';
 import type { LocalLibraryDisplayCatalog } from '../../services/playbackAdapters';
+import type { SleepTimerMode } from '../../stores/useSleepTimerStore';
 import type { HomeViewTab, LatentBackgroundTuning, LocalSong, LyricData, PlayerState, ReplayGainMode, SongResult, StatusMessage, SubtitleContentMode, VisualizerMode, VisualizerBackgroundMode, MonetBackgroundTuning } from '../../types';
 import type { LyricSegmentationRecord, LyricSegmentationSource } from '../../types/lyricSegmentation';
 import type { AppLanguagePreference } from '../../i18n/config';
@@ -331,6 +332,9 @@ export type CommandPaletteSettingsContext = {
     sleepTimerMinutes: number;
     setSleepTimerMinutes: (minutes: number) => void;
     sleepTimerDeadlineMs: number | null;
+    sleepTimerMode: SleepTimerMode;
+    setSleepTimerMode: (mode: SleepTimerMode) => void;
+    setSleepTimerExtend: (minutes: number) => void;
     canGenerateAITheme: boolean;
     isGeneratingTheme: boolean;
     generateAITheme: () => void;

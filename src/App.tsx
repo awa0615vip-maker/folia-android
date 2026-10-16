@@ -410,6 +410,8 @@ export default function App() {
         sleepTimerEnabled,
         sleepTimerHours,
         sleepTimerMinutes,
+        sleepTimerMode,
+        sleepTimerExtensionMs,
     } = useSleepTimerStore(useShallow(selectSleepTimerSnapshot));
     const {
         disableHomeDynamicBackground,
@@ -1744,6 +1746,10 @@ export default function App() {
         enabled: sleepTimerEnabled,
         hours: sleepTimerHours,
         minutes: sleepTimerMinutes,
+        mode: sleepTimerMode,
+        extensionMs: sleepTimerExtensionMs,
+        currentTrackId: currentSong ? String(currentSong.id) : null,
+        audioRef,
         onExpireFallback: handleSleepTimerExpireFallback,
     });
     // Saving or clearing a segmentation has to re-lay the current song's lyrics, so it needs the

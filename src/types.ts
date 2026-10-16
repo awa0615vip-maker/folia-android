@@ -1294,6 +1294,10 @@ export interface LocalSong {
   onlineMetadata?: import('./types/localLibrary').LocalSongOnlineMetadata;
   trackNumber?: number;
   discNumber?: number;
+  /** 作曲（自定义导入时填写）。 */
+  composer?: string;
+  /** 编曲（自定义导入时填写）。 */
+  arranger?: string;
   embeddedMetadataVersion?: number;
 
   localCoverAssetId?: string; // Content-addressed preferred local cover stored in local_cover_assets

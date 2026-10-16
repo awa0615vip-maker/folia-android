@@ -27,6 +27,7 @@ import DeveloperSettingsSubview from './settings/DeveloperSettingsSubview';
 import PlaybackSettingsSubview from './settings/PlaybackSettingsSubview';
 import InteractionSettingsSubview from './settings/InteractionSettingsSubview';
 import StorageSettingsSection from './settings/StorageSettingsSection';
+import LocalMusicImportDownloadSection from './settings/LocalMusicImportDownloadSection';
 import { AiHelpPromptModal } from './AiHelpPromptModal';
 import SettingsHelpActions from './SettingsHelpActions';
 import { buildDiagnosticReport } from '../../utils/buildDiagnosticReport';
@@ -1822,7 +1823,12 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                                             />
                                         )}
                                         {activeSettingsSection === 'storage' && (
-                                            <StorageSettingsSection
+                                            <div className="space-y-6">
+                                                <LocalMusicImportDownloadSection
+                                                    isDaylight={isDaylight}
+                                                    settingsCardClass={settingsCardClass}
+                                                />
+                                                <StorageSettingsSection
                                                 cacheDirectory={cacheDirectory}
                                                 cacheDirectoryIsDefault={cacheDirectoryIsDefault}
                                                 cacheDirectoryStatus={cacheDirectoryStatus}
@@ -1845,6 +1851,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                                                 toggleOffBackgroundClass={toggleOffBackgroundClass}
                                                 useInsetCacheRows
                                             />
+                                            </div>
                                         )}
                                         {activeSettingsSection === 'desktop' && isElectron && (
                                             <DesktopSettingsSubview

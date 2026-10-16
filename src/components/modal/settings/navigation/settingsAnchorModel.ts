@@ -54,6 +54,7 @@ export const SETTINGS_ANCHOR_DEFINITIONS = {
 
     // StorageSettingsSection (LocalLibraryWatchSection renders inside it)
     cacheDetails: { section: 'storage', labelKey: 'options.cacheDetails' },
+    localMusicImport: { section: 'storage', labelKey: 'options.localMusicImport' },
     r2Sync: { section: 'storage', labelKey: 'options.r2Sync' },
     localLibraryWatch: { section: 'storage', labelKey: 'options.localLibraryWatch' },
     mediaCache: { section: 'storage', labelKey: 'options.mediaCache' },

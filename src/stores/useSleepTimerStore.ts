@@ -25,15 +25,24 @@ const readStoredSleepTimerHours = () => readStoredSleepTimerPart(SLEEP_TIMER_HOU
 
 const readStoredSleepTimerMinutes = () => readStoredSleepTimerPart(SLEEP_TIMER_MINUTES_STORAGE_KEY, 59);
 
+export type SleepTimerMode = 'duration' | 'trackEnd';
+
 export type SleepTimerState = {
     sleepTimerEnabled: boolean;
     sleepTimerHours: number;
     sleepTimerMinutes: number;
     sleepTimerDeadlineMs: number | null;
     sleepTimerActivationId: number;
+    /** 暂停方式：duration＝倒计时到点暂停；trackEnd＝当前这首播完后暂停。 */
+    sleepTimerMode: SleepTimerMode;
+    /** 运行时追加的时长（毫秒），来自「延长 N 分钟」，不写进持久化时长。 */
+    sleepTimerExtensionMs: number;
     handleToggleSleepTimer: (enable: boolean) => void;
     handleSetSleepTimerHours: (hours: number) => void;
     handleSetSleepTimerMinutes: (minutes: number) => void;
+    handleSetSleepTimerMode: (mode: SleepTimerMode) => void;
+    /** 倒计时进行中再延长若干分钟（保留已走过的时间），并立即重新布防。 */
+    handleExtendSleepTimer: (minutes: number) => void;
 };
 
 export const useSleepTimerStore = create<SleepTimerState>((set, get) => ({
@@ -43,8 +52,11 @@ export const useSleepTimerStore = create<SleepTimerState>((set, get) => ({
     sleepTimerMinutes: readStoredSleepTimerMinutes(),
     sleepTimerDeadlineMs: null,
     sleepTimerActivationId: 0,
+    sleepTimerMode: 'duration',
+    sleepTimerExtensionMs: 0,
     handleToggleSleepTimer: (enable) => {
-        if (enable && get().sleepTimerHours === 0 && get().sleepTimerMinutes === 0) {
+        const needsDuration = get().sleepTimerMode === 'duration';
+        if (enable && needsDuration && get().sleepTimerHours === 0 && get().sleepTimerMinutes === 0) {
             setStatusMessage({
                 type: 'error',
                 text: i18n.t('commandPalette.sleepTimerDurationRequired'),
@@ -53,6 +65,8 @@ export const useSleepTimerStore = create<SleepTimerState>((set, get) => ({
         }
         set(state => ({
             sleepTimerEnabled: enable,
+            // 每次新的激活都清空上一次的「延长」，从设定时长重新开始。
+            sleepTimerExtensionMs: enable ? 0 : state.sleepTimerExtensionMs,
             // Every explicit activation starts a fresh countdown, even when its duration is unchanged.
             sleepTimerActivationId: enable
                 ? state.sleepTimerActivationId + 1
@@ -61,6 +75,31 @@ export const useSleepTimerStore = create<SleepTimerState>((set, get) => ({
         setStatusMessage({
             type: 'info',
             text: i18n.t('notifications.' + (enable ? 'sleepTimerOn' : 'sleepTimerOff')),
+        });
+    },
+    handleSetSleepTimerMode: (mode) => {
+        set(state => ({
+            sleepTimerMode: mode,
+            // 切换模式后重新布防（已开启时），否则上一模式的倒计时/监听仍在跑。
+            sleepTimerExtensionMs: 0,
+            sleepTimerDeadlineMs: null,
+            sleepTimerActivationId: state.sleepTimerEnabled
+                ? state.sleepTimerActivationId + 1
+                : state.sleepTimerActivationId,
+        }));
+    },
+    handleExtendSleepTimer: (minutes) => {
+        const extra = Math.floor(minutes) * 60 * 1000;
+        if (!(extra > 0)) return;
+        set(state => ({
+            // 延长即重新布防：在当前剩余基础上再追加时长。
+            sleepTimerExtensionMs: state.sleepTimerExtensionMs + extra,
+            sleepTimerActivationId: state.sleepTimerActivationId + 1,
+            sleepTimerEnabled: true,
+        }));
+        setStatusMessage({
+            type: 'info',
+            text: i18n.t('commandPalette.sleepTimerExtended', { minutes }),
         });
     },
     handleSetSleepTimerHours: (hours) => {
@@ -99,7 +138,11 @@ export const selectSleepTimerSnapshot = (state: SleepTimerState) => ({
     sleepTimerMinutes: state.sleepTimerMinutes,
     sleepTimerDeadlineMs: state.sleepTimerDeadlineMs,
     sleepTimerActivationId: state.sleepTimerActivationId,
+    sleepTimerMode: state.sleepTimerMode,
+    sleepTimerExtensionMs: state.sleepTimerExtensionMs,
     handleToggleSleepTimer: state.handleToggleSleepTimer,
     handleSetSleepTimerHours: state.handleSetSleepTimerHours,
     handleSetSleepTimerMinutes: state.handleSetSleepTimerMinutes,
+    handleSetSleepTimerMode: state.handleSetSleepTimerMode,
+    handleExtendSleepTimer: state.handleExtendSleepTimer,
 });

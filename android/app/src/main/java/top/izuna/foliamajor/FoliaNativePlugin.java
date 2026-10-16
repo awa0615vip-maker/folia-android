@@ -2,11 +2,15 @@ package top.izuna.foliamajor;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlarmManager;
+import android.app.PendingIntent;
 import android.content.ClipData;
 import android.content.ContentResolver;
+import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
 import android.os.Build;
+import android.os.SystemClock;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
 import android.provider.MediaStore;
@@ -32,11 +36,13 @@ import com.getcapacitor.annotation.PermissionCallback;
 
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.lang.reflect.Method;
 import java.net.URL;
 import java.util.ArrayList;
@@ -84,6 +90,15 @@ public class FoliaNativePlugin extends Plugin {
         .build();
     private LocalAudioServer localAudioServer;
     private boolean isAudioPickerOpen = false;
+    private boolean isCoverPickerOpen = false;
+    private boolean isLyricPickerOpen = false;
+    private static final String DOWNLOAD_USER_AGENT =
+        "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36";
+
+    // ===== 睡眠定时器（定时暂停） =====
+    private static final int SLEEP_TIMER_REQUEST_CODE = 31010;
+    // 已布防闹钟的触发时刻（基于 SystemClock.elapsedRealtime()，不受系统时间/时区影响）；0 表示未布防。
+    private static volatile long sleepTimerDeadlineElapsedMs = 0L;
 
     @Override
     public void load() {
@@ -102,6 +117,26 @@ public class FoliaNativePlugin extends Plugin {
         JSObject payload = new JSObject();
         payload.put("action", action);
         plugin.getActivity().runOnUiThread(() -> plugin.notifyListeners("mediaAction", payload));
+    }
+
+    /**
+     * 睡眠定时器到期：在主线程暂停播放并通知 Web 层复位定时器状态。
+     * 由 {@link SleepTimerReceiver} 通过精确闹钟唤起。
+     */
+    static void emitSleepTimerExpired() {
+        FoliaNativePlugin plugin = instance;
+        if (plugin == null) return;
+        Activity activity = plugin.getActivity();
+        if (activity == null) return;
+        activity.runOnUiThread(() -> {
+            sleepTimerDeadlineElapsedMs = 0L;
+            // 复用媒体动作通道发送 pause，WebView 监听后执行真正的暂停。
+            JSObject mediaPayload = new JSObject();
+            mediaPayload.put("action", "pause");
+            plugin.notifyListeners("mediaAction", mediaPayload);
+            // 专用事件，让 Web 层把定时器开关与倒计时复位。
+            plugin.notifyListeners("sleepTimerExpired", new JSObject());
+        });
     }
 
     /** True when the WebView handled Back; false lets the activity fall back to normal exit. */
@@ -488,6 +523,87 @@ public class FoliaNativePlugin extends Plugin {
         Activity activity = getActivity();
         call.resolve();
         if (activity != null) activity.runOnUiThread(activity::finish);
+    }
+
+    // ===== 睡眠定时器（定时暂停） =====
+
+    private PendingIntent buildSleepTimerPendingIntent() {
+        Context context = getContext();
+        Intent intent = new Intent(context, SleepTimerReceiver.class);
+        intent.setAction(SleepTimerReceiver.ACTION_SLEEP_TIMER_FIRED);
+        return PendingIntent.getBroadcast(
+            context,
+            SLEEP_TIMER_REQUEST_CODE,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+    }
+
+    /** 布防睡眠定时器。入参 durationMs：多少毫秒后暂停播放。 */
+    @PluginMethod
+    public void armSleepTimer(PluginCall call) {
+        Long durationMs = call.getLong("durationMs");
+        if (durationMs == null || durationMs <= 0) {
+            call.reject("durationMs must be a positive number");
+            return;
+        }
+        Context context = getContext();
+        AlarmManager alarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+        if (alarmManager == null) {
+            call.reject("AlarmManager unavailable");
+            return;
+        }
+
+        // 先取消上一次闹钟，保证每次布防都是全新的倒计时。
+        alarmManager.cancel(buildSleepTimerPendingIntent());
+
+        long triggerAtElapsed = SystemClock.elapsedRealtime() + durationMs;
+        sleepTimerDeadlineElapsedMs = triggerAtElapsed;
+        PendingIntent operation = buildSleepTimerPendingIntent();
+
+        try {
+            // 精确闹钟，Doze 下也能准时唤醒（API 31+ 需 SCHEDULE_EXACT_ALARM / USE_EXACT_ALARM 权限）。
+            alarmManager.setExactAndAllowWhileIdle(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                triggerAtElapsed,
+                operation
+            );
+        } catch (SecurityException securityException) {
+            // 缺少精确闹钟权限时降级为普通闹钟，仍会触发，仅可能有少量误差。
+            alarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtElapsed, operation);
+        }
+
+        JSObject result = new JSObject();
+        result.put("deadlineMs", System.currentTimeMillis() + durationMs);
+        call.resolve(result);
+    }
+
+    /** 取消睡眠定时器。 */
+    @PluginMethod
+    public void cancelSleepTimer(PluginCall call) {
+        cancelSleepTimerInternal();
+        call.resolve();
+    }
+
+    private void cancelSleepTimerInternal() {
+        Context context = getContext();
+        AlarmManager alarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+        if (alarmManager != null) {
+            alarmManager.cancel(buildSleepTimerPendingIntent());
+        }
+        sleepTimerDeadlineElapsedMs = 0L;
+    }
+
+    /** 查询剩余毫秒（未布防时返回 0）。 */
+    @PluginMethod
+    public void getSleepTimerRemainingMs(PluginCall call) {
+        long remainingMs = 0L;
+        if (sleepTimerDeadlineElapsedMs > 0) {
+            remainingMs = Math.max(0L, sleepTimerDeadlineElapsedMs - SystemClock.elapsedRealtime());
+        }
+        JSObject result = new JSObject();
+        result.put("remainingMs", remainingMs);
+        call.resolve(result);
     }
 
     @PluginMethod
@@ -945,6 +1061,231 @@ public class FoliaNativePlugin extends Plugin {
         if (ref == null || !ref.startsWith("imported-")) return null;
         if (ref.contains("/") || ref.contains("\\") || ref.contains("..")) return null;
         return new File(directory, ref);
+    }
+
+    // ===== 自定义导入：选封面 / 选歌词 =====
+
+    /** 从相册/文件中选择一张封面图，返回 data: URL（封面通常较小）。 */
+    @PluginMethod
+    public void pickCoverImage(PluginCall call) {
+        if (isCoverPickerOpen) {
+            call.reject("Cover picker is already open");
+            return;
+        }
+        Intent intent = new Intent(Intent.ACTION_GET_CONTENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("image/*");
+        isCoverPickerOpen = true;
+        startActivityForResult(call, intent, "handlePickedCover");
+    }
+
+    @ActivityCallback
+    private void handlePickedCover(PluginCall call, ActivityResult activityResult) {
+        isCoverPickerOpen = false;
+        if (call == null) return;
+        int resultCode = activityResult == null ? Activity.RESULT_CANCELED : activityResult.getResultCode();
+        Intent data = activityResult == null ? null : activityResult.getData();
+        Uri uri = data == null ? null : data.getData();
+        if (uri == null) {
+            JSObject out = new JSObject();
+            out.put("dataUrl", "");
+            out.put("cancelled", resultCode != Activity.RESULT_OK);
+            call.resolve(out);
+            return;
+        }
+        try {
+            byte[] bytes;
+            try (InputStream source = getContext().getContentResolver().openInputStream(uri);
+                 ByteArrayOutputStream sink = new ByteArrayOutputStream()) {
+                if (source == null) throw new IOException("Cannot open cover image");
+                byte[] buffer = new byte[64 * 1024];
+                int read;
+                while ((read = source.read(buffer)) != -1) sink.write(buffer, 0, read);
+                bytes = sink.toByteArray();
+            }
+            String mime = getContext().getContentResolver().getType(uri);
+            if (mime == null || mime.isEmpty()) mime = "image/jpeg";
+            int semi = mime.indexOf(';');
+            if (semi >= 0) mime = mime.substring(0, semi).trim();
+            JSObject out = new JSObject();
+            out.put("dataUrl", "data:" + mime + ";base64," + Base64.encodeToString(bytes, Base64.NO_WRAP));
+            out.put("size", bytes.length);
+            out.put("mime", mime);
+            out.put("cancelled", false);
+            call.resolve(out);
+        } catch (Exception error) {
+            call.reject(error.getMessage(), error);
+        }
+    }
+
+    /** 选择一个歌词文件（.lrc/.txt/.vtt/.ttml/.srt/.qrc/.krc/.fia 等），返回文本内容。 */
+    @PluginMethod
+    public void pickLyricFile(PluginCall call) {
+        if (isLyricPickerOpen) {
+            call.reject("Lyric picker is already open");
+            return;
+        }
+        Intent intent = new Intent(Intent.ACTION_GET_CONTENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("*/*");
+        isLyricPickerOpen = true;
+        startActivityForResult(call, intent, "handlePickedLyric");
+    }
+
+    @ActivityCallback
+    private void handlePickedLyric(PluginCall call, ActivityResult activityResult) {
+        isLyricPickerOpen = false;
+        if (call == null) return;
+        int resultCode = activityResult == null ? Activity.RESULT_CANCELED : activityResult.getResultCode();
+        Intent data = activityResult == null ? null : activityResult.getData();
+        Uri uri = data == null ? null : data.getData();
+        if (uri == null) {
+            JSObject out = new JSObject();
+            out.put("content", "");
+            out.put("fileName", "");
+            out.put("cancelled", resultCode != Activity.RESULT_OK);
+            call.resolve(out);
+            return;
+        }
+        try {
+            String fileName = queryDisplayName(getContext().getContentResolver(), uri);
+            byte[] bytes;
+            try (InputStream source = getContext().getContentResolver().openInputStream(uri);
+                 ByteArrayOutputStream sink = new ByteArrayOutputStream()) {
+                if (source == null) throw new IOException("Cannot open lyric file");
+                byte[] buffer = new byte[64 * 1024];
+                int read;
+                while ((read = source.read(buffer)) != -1) sink.write(buffer, 0, read);
+                bytes = sink.toByteArray();
+            }
+            JSObject out = new JSObject();
+            out.put("content", new String(bytes, StandardCharsets.UTF_8));
+            out.put("fileName", fileName == null ? "" : fileName);
+            out.put("cancelled", false);
+            call.resolve(out);
+        } catch (Exception error) {
+            call.reject(error.getMessage(), error);
+        }
+    }
+
+    // ===== 下载音乐到本地 =====
+
+    /** 从 URL 推断音频扩展名，无法识别时默认 .mp3。 */
+    private static String audioExtensionFromUrl(String value) {
+        String path = value;
+        int query = path.indexOf('?');
+        if (query >= 0) path = path.substring(0, query);
+        int slash = path.lastIndexOf('/');
+        String last = slash >= 0 ? path.substring(slash + 1) : path;
+        int dot = last.lastIndexOf('.');
+        if (dot <= 0 || dot >= last.length() - 1) return ".mp3";
+        String ext = last.substring(dot).toLowerCase(Locale.ROOT);
+        if (ext.matches("\\.(mp3|flac|wav|m4a|aac|ogg|opus|ape|wma|mp4|oga)")) return ext;
+        return ".mp3";
+    }
+
+    /** 下载一个 URL 到指定文件（流式落盘，不把整文件读进内存）。 */
+    private void downloadToFile(String url, File target) throws IOException {
+        Request request = new Request.Builder()
+            .url(url)
+            .header("User-Agent", DOWNLOAD_USER_AGENT)
+            .header("Accept-Encoding", "identity")
+            .build();
+        try (Response response = client.newCall(request).execute()) {
+            ResponseBody body = response.body();
+            if (!response.isSuccessful() || body == null) {
+                throw new IOException("Download failed (" + response.code() + ")");
+            }
+            try (InputStream input = body.byteStream();
+                 OutputStream output = new FileOutputStream(target)) {
+                byte[] buffer = new byte[128 * 1024];
+                int read;
+                while ((read = input.read(buffer)) != -1) output.write(buffer, 0, read);
+            }
+        }
+    }
+
+    /** 下载一个 URL 的字节内容（用于封面/歌词这类小文件）。 */
+    private byte[] downloadBytes(String url) throws IOException {
+        Request request = new Request.Builder()
+            .url(url)
+            .header("User-Agent", DOWNLOAD_USER_AGENT)
+            .header("Accept-Encoding", "identity")
+            .build();
+        try (Response response = client.newCall(request).execute()) {
+            ResponseBody body = response.body();
+            if (!response.isSuccessful() || body == null) {
+                throw new IOException("Download failed (" + response.code() + ")");
+            }
+            return body.bytes();
+        }
+    }
+
+    /**
+     * 下载音乐到本地：音频 URL（必填），封面/歌词 URL（可选）。
+     * 音频以流式写入私有目录，封面返回 data: URL，歌词返回文本。
+     */
+    @PluginMethod
+    public void downloadToLibrary(PluginCall call) {
+        final String audioUrl = call.getString("audioUrl", "");
+        final String coverUrl = call.getString("coverUrl", "");
+        final String lyricsUrl = call.getString("lyricsUrl", "");
+        if (audioUrl == null || audioUrl.isEmpty()) {
+            call.reject("audioUrl is required");
+            return;
+        }
+        final Activity activity = getActivity();
+        new Thread(() -> {
+            try {
+                if (localAudioServer == null) localAudioServer = new LocalAudioServer(getContext());
+                int port = localAudioServer.start();
+                File directory = localAudioServer.importedAudioDirectory();
+                String safeName = "imported-dl-" + Long.toHexString(System.currentTimeMillis())
+                    + audioExtensionFromUrl(audioUrl);
+                File audioFile = new File(directory, safeName);
+                downloadToFile(audioUrl, audioFile);
+
+                String coverDataUrl = "";
+                if (coverUrl != null && !coverUrl.isEmpty()) {
+                    try {
+                        byte[] coverBytes = downloadBytes(coverUrl);
+                        String mime = "image/jpeg";
+                        String extension = audioExtensionFromUrl(coverUrl);
+                        if (".png".equals(extension)) mime = "image/png";
+                        else if (".webp".equals(extension)) mime = "image/webp";
+                        else if (".gif".equals(extension)) mime = "image/gif";
+                        coverDataUrl = "data:" + mime + ";base64,"
+                            + Base64.encodeToString(coverBytes, Base64.NO_WRAP);
+                    } catch (Exception ignored) {
+                        // 封面失败不影响音频下载。
+                    }
+                }
+
+                String lyricsText = "";
+                if (lyricsUrl != null && !lyricsUrl.isEmpty()) {
+                    try {
+                        lyricsText = new String(downloadBytes(lyricsUrl), StandardCharsets.UTF_8);
+                    } catch (Exception ignored) {
+                        // 歌词失败不影响音频下载。
+                    }
+                }
+
+                JSObject out = new JSObject();
+                out.put("audioRef", safeName);
+                out.put("audioUrl", "http://127.0.0.1:" + port + "/audio/" + safeName);
+                out.put("fileSize", audioFile.length());
+                out.put("mime", LocalAudioServer.guessMimeType(safeName));
+                out.put("coverDataUrl", coverDataUrl);
+                out.put("lyricsText", lyricsText);
+                out.put("port", port);
+                if (activity != null) activity.runOnUiThread(() -> call.resolve(out));
+                else call.resolve(out);
+            } catch (Exception error) {
+                String message = error.getMessage() == null ? error.toString() : error.getMessage();
+                if (activity != null) activity.runOnUiThread(() -> call.reject(message, error));
+                else call.reject(message, error);
+            }
+        }, "folia-download").start();
     }
 
     private List<JSObject> parseCookieHeader(String header, String domain) {

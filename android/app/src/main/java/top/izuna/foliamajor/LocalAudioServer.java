@@ -153,7 +153,8 @@ final class LocalAudioServer {
 
             String token = URLDecoder.decode(path.substring(AUDIO_PATH_PREFIX.length()), "UTF-8");
             if (token.startsWith(IMPORTED_PREFIX)) {
-                streamImportedFile(output, requestParts, headers, token.substring(IMPORTED_PREFIX.length()));
+                // 注意：磁盘上的文件名本身就带 imported- 前缀，不能再剥掉，否则会 404。
+                streamImportedFile(output, requestParts, headers, token);
                 return;
             }
             streamMediaStoreFile(output, requestParts, headers, token);
@@ -190,6 +191,12 @@ final class LocalAudioServer {
         Map<String, String> headers,
         String fileName
     ) throws IOException {
+        // 校验完整文件名：必须带 imported- 前缀，且不允许路径穿越。
+        if (fileName == null || !fileName.startsWith(IMPORTED_PREFIX)
+            || fileName.contains("/") || fileName.contains("\\") || fileName.contains("..")) {
+            writeStatus(output, 404, "Not Found");
+            return;
+        }
         File target = new File(importedAudioDirectory(), fileName);
         if (!target.isFile()) {
             writeStatus(output, 404, "Not Found");

@@ -1,7 +1,7 @@
 // src/types/localCover.ts
 // Defines content-addressed local cover records independently from local-song metadata.
 
-export type LocalCoverSourceKind = 'folder' | 'embedded';
+export type LocalCoverSourceKind = 'folder' | 'embedded' | 'manual';
 
 export type LocalCoverAssetBackend = 'electron' | 'opfs';
 
