@@ -30,6 +30,7 @@ import {
 import { clearSessionValues, putSessionValue, readSession } from './repositories/sessionRepository';
 import { readThemeRegistryEntries, writeThemeRegistryEntries } from './repositories/themeRegistryRepository';
 import { clearCoverAssets, getCoverAssetUsage } from './binaryAssetStore';
+import { clearOnlineCoverCache, getOnlineCoverCacheUsage } from './onlineCoverCache';
 import { clearLocalCoverBinaries } from './localCoverBinaryStore';
 import {
   cancelLocalCoverAssetMigration,
@@ -155,7 +156,8 @@ export const getCacheUsage = async (): Promise<number> => {
   try {
     const browserSize = await getBrowserCacheUsage();
     const audioSize = hasElectronAudioCacheBridge() ? await window.electron!.getAudioCacheUsage() : 0;
-    return browserSize + audioSize + await getCoverAssetUsage();
+    const onlineCoverSize = (await getOnlineCoverCacheUsage()).bytes;
+    return browserSize + audioSize + await getCoverAssetUsage() + onlineCoverSize;
   } catch {
     return 0;
   }
@@ -179,6 +181,7 @@ export const getCacheUsageByCategory = async (): Promise<{
       usage.media += await window.electron!.getAudioCacheUsage();
     }
     usage.cover += await getCoverAssetUsage();
+    usage.cover += (await getOnlineCoverCacheUsage()).bytes;
     return usage;
   } catch {
     return { playlist: 0, lyrics: 0, cover: 0, media: 0, analysis: 0, mediaCount: 0 };
@@ -191,7 +194,10 @@ export const clearCacheByCategory = async (category: CacheCategory): Promise<voi
     if (category === 'media' && hasElectronAudioCacheBridge()) {
       await window.electron!.clearAudioCache();
     }
-    if (category === 'cover') await clearCoverAssets();
+    if (category === 'cover') {
+      await clearCoverAssets();
+      await clearOnlineCoverCache();
+    }
   } catch (error) {
     console.error('Failed to clear cache by category', error);
   }

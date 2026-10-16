@@ -132,10 +132,226 @@ const getCoverResponse = async (requestUrl) => {
   }
 };
 
+// ===========================================================================
+// 在线封面（网易云 / QQ / 酷狗 / 酷我 / Navidrome 等）持久化缓存
+//
+// 只拦截列表 / 网格 / 搜索 / 播放页实际请求的封面图片，做 Cache-First：
+//   命中本地 -> 直接返回，不再请求网络（重启后秒开、弱网不白屏）；
+//   未命中   -> 拉网络：
+//               · 支持 CORS 的图床（网易云等）可读到真实字节，存入可读缓存，精确做
+//                 约 200MB 的 LRU 淘汰；
+//               · 不支持 CORS 的图床（QQ / 酷狗）只能拿到 opaque 响应，单独存一个很小
+//                 的缓存、按条目数淘汰（opaque 读不到字节，不能按 MB 统计，浏览器还会
+//                 按保守配额预留，所以严格限量）。
+//
+// 铁律：任何一步出错都回退到正常网络，绝不因为缓存让封面显示失败。
+// 不改任何 URL、不改任何组件与外观，只在网络层拦截。
+// ===========================================================================
+
+const ONLINE_COVER_CACHE = 'folia-online-covers-v1';
+const OPAQUE_COVER_CACHE = 'folia-online-covers-opaque-v1';
+// 可读在线封面的目标上限（约 200MB）。
+const ONLINE_COVER_BYTES_LIMIT = 200 * 1024 * 1024;
+// opaque 响应无法读字节、浏览器还会按保守配额预留，只允许缓存少量（真实磁盘很小）。
+const OPAQUE_COVER_MAX_ENTRIES = 120;
+
+const IMAGE_EXT_PATTERN = /\.(?:jpe?g|png|webp|gif|bmp|avif|heic)(?:\?|#|$)/i;
+const AUDIO_PATH_PATTERN = /\.(?:mp3|flac|m4a|ogg|aac|wma|wav)(?:\?|#|$)/i;
+// 仅这些已知封面图床会被缓存，避免误拦 API / 音频。
+const ONLINE_COVER_HOST_PATTERNS = [
+  /^p\d{1,2}\.music\.126\.net$/i,
+  /^y\.gtimg\.cn$/i,
+  /^y\.qq\.com$/i,
+  /(?:^|\.)(?:kugou\.com|kgimg\.com)$/i,
+  /^img\d*\.kuwo\.cn$/i,
+];
+
+// 内存 LRU：key = 完整 URL，value = 可读响应真实字节（opaque 记 0）。
+// Map 迭代顺序即插入顺序，访问时 delete + set 移到末尾，淘汰从头部开始。
+const readableLru = new Map();
+const opaqueLru = new Map();
+let readableBytes = 0;
+let lruRebuilt = false;
+
+const isKnownCoverHost = (hostname) => ONLINE_COVER_HOST_PATTERNS.some(pattern => pattern.test(hostname));
+
+const looksLikeCoverUrl = (url) => {
+  const path = url.pathname;
+  if (AUDIO_PATH_PATTERN.test(path) || /\/song\/(?:media|url|enchant)/i.test(path)) return false;
+  if (IMAGE_EXT_PATTERN.test(path)) return true;
+  // 网易云 ?param=512y512、Navidrome getCoverArt?size=、酷狗 /stdmusic/<size>/、QQ T001/T002...M000
+  if (url.searchParams.has('param')) return true;
+  if (path.includes('getCoverArt')) return true;
+  if (/\/stdmusic\/\d+\//.test(path)) return true;
+  if (/T00[12](?:R\d+x\d+)?M000/.test(path)) return true;
+  return false;
+};
+
+const isOnlineCoverRequest = (url, request) => {
+  if (request.method !== 'GET') return false;
+  if (url.origin === self.location.origin) return false; // 同源交给本地封面逻辑
+  return isKnownCoverHost(url.hostname) && looksLikeCoverUrl(url);
+};
+
+const isImageResponse = (response) => {
+  if (!response) return false;
+  const contentType = response.headers.get('content-type');
+  return !!contentType && contentType.toLowerCase().startsWith('image/');
+};
+
+const touchLru = (lru, key) => {
+  if (lru.has(key)) {
+    const previous = lru.get(key) || 0;
+    lru.delete(key);
+    lru.set(key, previous);
+  } else {
+    lru.set(key, 0);
+  }
+};
+
+// SW 重启后内存 LRU 为空，首次淘汰前从 Cache 重建一次（可读缓存读真实字节）。
+const ensureLruRebuilt = async () => {
+  if (lruRebuilt) return;
+  lruRebuilt = true;
+  try {
+    const readable = await caches.open(ONLINE_COVER_CACHE);
+    const readableRequests = await readable.keys();
+    for (const request of readableRequests) {
+      let size = 0;
+      try {
+        const response = await readable.match(request);
+        if (response) size = (await response.blob()).size;
+      } catch {
+        // 不可读时按 0 计，后续按条目数兜底。
+      }
+      readableLru.set(request.url, size);
+      readableBytes += size;
+    }
+    const opaque = await caches.open(OPAQUE_COVER_CACHE);
+    const opaqueRequests = await opaque.keys();
+    for (const request of opaqueRequests) opaqueLru.set(request.url, 0);
+  } catch {
+    // 缓存不可用时整体降级为普通网络请求。
+  }
+};
+
+const trimReadableCache = async () => {
+  try {
+    await ensureLruRebuilt();
+    const cache = await caches.open(ONLINE_COVER_CACHE);
+    let guard = 0;
+    while (readableBytes > ONLINE_COVER_BYTES_LIMIT && readableLru.size > 0 && guard < 10000) {
+      guard += 1;
+      const oldestKey = readableLru.keys().next().value;
+      if (oldestKey === undefined) break;
+      const size = readableLru.get(oldestKey) || 0;
+      await cache.delete(oldestKey);
+      readableLru.delete(oldestKey);
+      readableBytes -= size;
+    }
+  } catch {
+    // 淘汰失败不影响返回。
+  }
+};
+
+const trimOpaqueCache = async () => {
+  try {
+    const cache = await caches.open(OPAQUE_COVER_CACHE);
+    let guard = 0;
+    while (opaqueLru.size > OPAQUE_COVER_MAX_ENTRIES && guard < 10000) {
+      guard += 1;
+      const oldestKey = opaqueLru.keys().next().value;
+      if (oldestKey === undefined) break;
+      await cache.delete(oldestKey);
+      opaqueLru.delete(oldestKey);
+    }
+  } catch {
+    // 同上。
+  }
+};
+
+// 不支持 CORS 的图床（QQ / 酷狗）：保留页面的 no-cors 请求拿 opaque，命中 / 回源都兜底。
+const serveOpaqueCover = async (event) => {
+  const opaqueCache = await caches.open(OPAQUE_COVER_CACHE);
+  const cached = await opaqueCache.match(event.request);
+  if (cached) {
+    touchLru(opaqueLru, event.request.url);
+    return cached;
+  }
+  const response = await fetch(event.request);
+  if (response && (response.type === 'opaque' || response.ok)) {
+    const clone = response.clone();
+    touchLru(opaqueLru, event.request.url);
+    event.waitUntil((async () => {
+      try {
+        await opaqueCache.put(event.request, clone);
+        await trimOpaqueCache();
+      } catch {
+        // 配额不足或不可写时静默忽略，封面仍正常返回。
+      }
+    })());
+  }
+  return response;
+};
+
+const serveOnlineCover = async (event) => {
+  const readableCache = await caches.open(ONLINE_COVER_CACHE);
+  const cached = await readableCache.match(event.request);
+  if (cached) {
+    touchLru(readableLru, event.request.url);
+    return cached;
+  }
+
+  // Service Worker 可脱离页面的 no-cors 模式，主动用 CORS 重发。
+  // 网易云等图床返回 Access-Control-Allow-Origin:*，能读到真实字节用于容量统计。
+  try {
+    const response = await fetch(event.request.url, { mode: 'cors', credentials: 'omit' });
+    if (response.ok && response.type === 'cors' && isImageResponse(response)) {
+      const blob = await response.blob();
+      const responseInit = {
+        status: response.status,
+        statusText: response.statusText,
+        headers: new Headers(response.headers),
+      };
+      const size = blob.size;
+      event.waitUntil((async () => {
+        try {
+          await readableCache.put(event.request, new Response(blob, responseInit));
+          readableLru.set(event.request.url, size);
+          readableBytes += size;
+          await trimReadableCache();
+        } catch {
+          // 写盘失败不影响本次返回。
+        }
+      })());
+      return new Response(blob, responseInit);
+    }
+  } catch {
+    // CORS 被拒绝或网络失败，落入 opaque / 网络兜底。
+  }
+
+  return await serveOpaqueCover(event);
+};
+
 self.addEventListener('fetch', event => {
-  const url = new URL(event.request.url);
-  if (event.request.method !== 'GET' || url.origin !== self.location.origin || !url.pathname.startsWith(COVER_PATH_PREFIX)) {
+  if (event.request.method !== 'GET') return;
+  let url;
+  try {
+    url = new URL(event.request.url);
+  } catch {
     return;
   }
-  event.respondWith(getCoverResponse(url));
+
+  // 同源本地封面：从 OPFS 直接提供（原有逻辑，保持不变）。
+  if (url.origin === self.location.origin && url.pathname.startsWith(COVER_PATH_PREFIX)) {
+    event.respondWith(getCoverResponse(url));
+    return;
+  }
+
+  // 跨域在线封面：Cache-First 持久缓存；任何失败都回退普通网络。
+  if (isOnlineCoverRequest(url, event.request)) {
+    event.respondWith(
+      serveOnlineCover(event).catch(() => fetch(event.request).catch(() => Response.error())),
+    );
+  }
 });
