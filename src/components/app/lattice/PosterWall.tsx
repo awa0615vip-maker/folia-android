@@ -301,7 +301,6 @@ export default function PosterWall({
         cameraRef,
         getWorldBounds,
         viewportRef,
-        enablePinch: true,
     });
 
     // Only the block holding the open card is re-geared; every other poster keeps its base rect.
