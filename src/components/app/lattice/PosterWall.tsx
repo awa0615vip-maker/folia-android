@@ -29,6 +29,8 @@ import { EXPANSION_SPAN } from '../../wall/blockTemplates';
 import { useLatticeSettingsStore } from '../../../stores/useLatticeSettingsStore';
 import { resolveWallHandoffRole, useWallHandoffStore } from '../../../stores/useWallHandoffStore';
 import { useLatticeWallHandoff } from './useLatticeWallHandoff';
+import { wallFirstScreenStarted, notifyWallFirstScreenReady } from '../../../utils/wallFirstScreenGate';
+import { IS_ANDROID_WEBVIEW } from '../../../utils/platform';
 
 // Draggable poster field: one greedily packed block template repeats over the queue.
 // 翻牌交接（设计稿 §7「进入队列」）：从资料库墙进来时不跑自己的入场波次，海报侧立着等资料库墙翻出、再按到起点的距离翻进；
@@ -113,8 +115,11 @@ export default function PosterWall({
     const reservedViewports = performanceMode ? 1 : MAX_RESERVED_VIEWPORTS;
 
     const geometry = useMemo(() => getLatticeGeometry(tiles.length, METRICS), [tiles.length]);
-    // 全量渲染：裁剪余量直接放宽到整面墙尺寸，所有卡片一次性挂载，滑动 / 缩放到任何位置都不再露白。
-    const overscan = Math.max(geometry.cellWidth, geometry.cellHeight, OVERSCAN);
+    // 每次只渲染约 1.7 倍屏幕大小的区域（四周各留 0.35 屏）。滑过的区域由 bounds 累积永久保留，
+    // 卡片挂载后不再卸载；首屏只挂这一小片，进墙快，随滑动逐片补渲染。
+    const overscan = measured
+        ? Math.max(viewportRef.current.width / cameraScale, viewportRef.current.height / cameraScale) * 0.35
+        : OVERSCAN;
     const [activePoster, setActivePoster] = useLatticePosterSelection(tiles, geometry, METRICS);
 
     const publishCurrentPosterVisibility = useCallback((camera: LatticeCamera) => {
@@ -149,7 +154,18 @@ export default function PosterWall({
         publishCurrentPosterVisibility(next);
         if (!updateBounds || frameRef.current !== null) return;
         frameRef.current = requestAnimationFrame(() => {
-            setBounds(getWorldBounds(cameraRef.current, viewportRef.current));
+            // 渲染区域只增不减：把新视口并进已渲染区域，滑过的卡片永久保留、不再卸载重渲染。
+            setBounds(prev => {
+                const next = getWorldBounds(cameraRef.current, viewportRef.current);
+                if (next.left >= prev.left && next.right <= prev.right
+                    && next.top >= prev.top && next.bottom <= prev.bottom) return prev;
+                return {
+                    left: Math.min(prev.left, next.left),
+                    right: Math.max(prev.right, next.right),
+                    top: Math.min(prev.top, next.top),
+                    bottom: Math.max(prev.bottom, next.bottom),
+                };
+            });
             frameRef.current = null;
         });
     }, [publishCurrentPosterVisibility]);
@@ -277,6 +293,67 @@ export default function PosterWall({
         () => new Set(instances.map(instance => instance.instanceId)),
         [instances],
     );
+
+    // 安卓启动门：首屏卡片在启动遮罩下完成挂载、封面经 SW 缓存解码后才放行（见 AppSplashGate）。
+    useEffect(() => {
+        if (!IS_ANDROID_WEBVIEW || !measured || instances.length === 0) return;
+        wallFirstScreenStarted();
+        const field = containerRef.current;
+        if (!field) {
+            notifyWallFirstScreenReady();
+            return;
+        }
+        const start = performance.now();
+        const INNER_LIMIT_MS = 4800;
+        let cancelled = false;
+        let timer = 0;
+        const probes = new Map<string, HTMLImageElement>();
+        const waitFrames = (n: number) => new Promise<void>(resolve => {
+            const step = () => {
+                n -= 1;
+                if (n > 0) requestAnimationFrame(step);
+                else resolve();
+            };
+            requestAnimationFrame(step);
+        });
+        // 封面是 CSS 背景图，读不到 img.complete：用同 URL 的 Image 探测，命中缓存即代表背景马上能画。
+        const coversReady = (): boolean => {
+            const urls: string[] = [];
+            field.querySelectorAll<HTMLElement>('.lattice-poster').forEach(el => {
+                const match = (el.style.backgroundImage || '').match(/url\(["']?([^"')]+)["']?\)/);
+                if (match?.[1]) urls.push(match[1]);
+            });
+            if (urls.length === 0) return false;
+            for (const url of new Set(urls)) {
+                let probe = probes.get(url);
+                if (!probe) {
+                    probe = new Image();
+                    probe.src = url;
+                    probes.set(url, probe);
+                }
+                if (!probe.complete) return false;
+            }
+            return true;
+        };
+        const finish = () => {
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                if (!cancelled) notifyWallFirstScreenReady();
+            }));
+        };
+        const poll = () => {
+            if (cancelled) return;
+            if (coversReady() || performance.now() - start > INNER_LIMIT_MS) {
+                finish();
+                return;
+            }
+            timer = window.setTimeout(poll, 120);
+        };
+        void waitFrames(2).then(poll);
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timer);
+        };
+    }, [measured, instances.length === 0]);
 
     // World point the viewport is centred on; both the keyboard seed and playback follow need it.
     const getViewportCenter = useCallback(() => {
