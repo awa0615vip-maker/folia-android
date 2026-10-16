@@ -20,11 +20,13 @@ import { backgroundsRegistry } from './registries/backgrounds';
 import { stageLayersRegistry } from './registries/stageLayers';
 import { settingsSectionsRegistry } from './registries/settingsSections';
 import { playerPanelTabsRegistry } from './registries/playerPanelTabs';
+import { homeTabsRegistry } from './registries/homeTabs';
 import { controlButtonsRegistry, progressLayersRegistry } from './registries/progress';
 import { stylesRegistry } from './registries/styles';
 import { addFoliumEventHandler } from './events';
 import { createFoliumNetService, createFoliumPlaybackService, createFoliumUiService } from './services';
 import { FOLIUM_LYRICS_HELPERS, FOLIUM_THEME_HELPERS } from './sharedHelpers';
+import { bindFoliumStageRegistry } from './stageRegistry';
 
 // src/mods/folium/api.ts
 // Builds the `folium` object one mod's client entry receives. Everything is
@@ -43,6 +45,7 @@ const UI_ONLY_REGISTRIES = new Set<keyof FoliumRegistries>([
     'commands',
     'stageLayers',
     'playerPanelTabs',
+    'homeTabs',
     'controlButtons',
     'progressLayers',
     'styles',
@@ -58,6 +61,7 @@ const HOST_REGISTRIES: Record<keyof FoliumRegistries, AnyHostRegistry> = {
     stageLayers: stageLayersRegistry,
     settingsSections: settingsSectionsRegistry,
     playerPanelTabs: playerPanelTabsRegistry,
+    homeTabs: homeTabsRegistry,
     controlButtons: controlButtonsRegistry,
     progressLayers: progressLayersRegistry,
     styles: stylesRegistry,
@@ -150,10 +154,11 @@ export const createFoliumClientApi = (mod: ModRuntimeInfo, options: FoliumClient
     const { context } = options;
     const modId = mod.id;
     const optedIn = new Set(mod.experimental ?? []);
+    const stageLayers = bindFoliumStageRegistry(stageLayersRegistry, mod, context);
 
     const inert = (name: keyof FoliumRegistries) => context !== 'main' && UI_ONLY_REGISTRIES.has(name);
     const registries = Object.freeze({
-        visualizers: bindRegistry(visualizersRegistry, modId, inert('visualizers')),
+        visualizers: bindFoliumStageRegistry(visualizersRegistry, mod, context),
         tunings: bindRegistry(tuningsRegistry, modId, inert('tunings')),
         commands: bindRegistry(commandsRegistry, modId, inert('commands')),
         backgrounds: bindRegistry(backgroundsRegistry, modId, inert('backgrounds')),
@@ -163,7 +168,7 @@ export const createFoliumClientApi = (mod: ModRuntimeInfo, options: FoliumClient
                 if (!mod.permissions.includes('ui.stage')) {
                     throw new Error('permission-denied:ui.stage');
                 }
-                return inert('stageLayers') ? noopHandle(modId, def?.id) : stageLayersRegistry.register(modId, def);
+                return inert('stageLayers') ? noopHandle(modId, def?.id) : stageLayers.register(def);
             },
         }),
         // The handle carries the section's values so the mod can read what the user set.
@@ -175,6 +180,7 @@ export const createFoliumClientApi = (mod: ModRuntimeInfo, options: FoliumClient
             },
         }),
         playerPanelTabs: bindRegistry(playerPanelTabsRegistry, modId, inert('playerPanelTabs')),
+        homeTabs: bindRegistry(homeTabsRegistry, modId, inert('homeTabs')),
         controlButtons: bindRegistry(controlButtonsRegistry, modId, inert('controlButtons')),
         progressLayers: bindRegistry(progressLayersRegistry, modId, inert('progressLayers')),
         styles: bindRegistry(stylesRegistry, modId, inert('styles')),

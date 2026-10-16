@@ -7,7 +7,7 @@ import type { LibraryDirectoryBatchController } from './directory';
 import type { LibraryHomeData } from './home';
 import type { LibraryHomeResources } from './homeModel';
 import type { CollectionMutationController } from './mutations';
-import type { LibraryPlaybackPort, LibraryStageToolsPort } from './ports';
+import type { LibraryPlaybackPort } from './ports';
 import type { CollectionResource } from './resource';
 import type { LibrarySuiteChromeActionMeta } from './suiteChrome';
 
@@ -237,6 +237,18 @@ export type LibraryArtistSurfaceProps = LibrarySurfaceBaseProps & LibraryCollect
     onEditEntity: (entityId: string) => void;
 };
 
+/** Host-owned navigation entry; suites present it without knowing its implementation. */
+export type LibraryHomeExtraTab = {
+    id: string;
+    label: string;
+    /**
+     * 宿主算好的选中态：这个页面此刻开着。有一个为 true 时原生页签都不算选中（aria-selected、高亮），
+     * F6 / Tab 循环也从它算起。
+     */
+    active: boolean;
+    select: () => void;
+};
+
 /** 首页 surface：首页模型的数据，加上打开集合的入口。 */
 export type LibraryHomeSurfaceProps = LibrarySurfaceBaseProps & LibraryHomeData & {
     /**
@@ -254,6 +266,10 @@ export type LibraryHomeSurfaceProps = LibrarySurfaceBaseProps & LibraryHomeData 
     directoryActions?: LibraryDirectoryBatchController;
     /** 首页的资源与控制器（宿主创建，见 library/app/useLibraryHomeResources）；suite 只订阅。 */
     homeResources: LibraryHomeResources;
+    /** Additional full-page entries; native music-source tabs remain unchanged. */
+    extraTabs?: readonly LibraryHomeExtraTab[];
+    /** Notify the host when native navigation takes over, even when reselecting the current tab. */
+    onNativeTabSelected?: () => void;
 };
 
 export type LibrarySurfacePropsMap = {
@@ -391,8 +407,6 @@ export type LibrarySuiteStageProps = {
      * 「前往 Lattice」用它；缺省时不画那一格。
      */
     onOpenLattice?: () => void;
-    /** 墙上工具面板的宿主动作（首页数据的 stageTools：生成主题、队列洗牌、音量预览）。缺省时工具面板不画这几项。 */
-    tools?: LibraryStageToolsPort;
 };
 
 /**

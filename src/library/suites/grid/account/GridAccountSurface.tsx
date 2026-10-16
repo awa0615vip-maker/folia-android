@@ -102,7 +102,12 @@ const buildLoginModalProps = (
                 failure: session.failure,
                 tips: view.failureTips,
                 selfCheck: view.selfCheck,
-                buildReport,
+                reportElsewhereNote: view.reportElsewhereNote,
+                buildReport: async () => {
+                    const result = await account.buildLoginDiagnosticReport();
+                    if (result.status !== 'ok') throw new Error('no login session to report');
+                    return result.report;
+                },
             })
             : undefined,
         // 常驻诊断入口：二维码流程一开始就给，不必等失败。选登录方式的两步阶段还没有会话，

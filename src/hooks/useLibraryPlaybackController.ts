@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import type { MotionValue } from 'framer-motion';
 import { LyricParserFactory } from '../utils/lyrics/LyricParserFactory';
-import { getFromCacheWithMigration, getLocalSongs, removeFromCache, saveLocalSong, saveToCache } from '../services/db';
+import { getFromCacheWithMigration, getLocalSong, getLocalSongs, removeFromCache, saveLocalSong, saveToCache } from '../services/db';
 import { getCachedCoverUrl, loadCachedOrFetchCover } from '../services/coverCache';
 import { ensureLocalSongCoverAsset, getAudioFromLocalSong } from '../services/localMusicService';
 import { addSongsToLocalPlaylist, buildCanonicalLocalSongIdIndex, createLocalPlaylist, getLocalPlaylists, setLocalSongFavorite } from '../services/localPlaylistService';
@@ -36,15 +36,17 @@ import { buildLocalSourceRevision, buildNavidromeSourceRevision } from '../servi
 import { getPlaybackRepresentationForRevision } from '../services/playbackRecovery/representationRegistry';
 import { getProviderCacheKey } from '../services/onlineMusic/providerStorage';
 import { getNavidromeConfig, navidromeApi } from '../services/navidromeService';
+import { notifyPlaybackFailed } from '../services/hostExtensionHooks';
 import { PlayerState } from '../types';
 import type { LyricData, LocalPlaylist, LocalSong, OnlineLyricsState, QueueAddBehavior, SongResult, StatusMessage } from '../types';
 import type { AudioQualityPreference, MediaId, ProviderCollection } from '../types/onlineMusic';
-import type { PlaybackSnapshot, PlaybackNavigationOptions } from '../types/appPlayback';
+import type { LibraryPlayOptions, PlaybackSnapshot } from '../types/appPlayback';
 import type { NavidromeSong } from '../types/navidrome';
 import type { NavidromeMatchData } from '../components/modal/NaviLyricMatchModal';
 import { applyQueueAddBehavior } from '../utils/queueAddBehavior';
 import { loadOnlineLyricsState, resolveOnlineLyrics, saveOnlineLyricsState, getOnlineLyricsStateCacheKey } from '../utils/onlineLyricsState';
 import { hasLocalSongCover } from '../utils/localSongCover';
+import { isSameLocalSongRecord } from '../utils/localSongRecordEquality';
 import { getLocalCoverAssetUrl } from '../services/localCoverAssetUrl';
 import { applyMatchedMetadata } from '../services/localLibraryCatalogService';
 import { setLocalSongPureMusicMark } from '../services/localSongMatchSelectionService';
@@ -66,6 +68,16 @@ import { detectLyricFileIssues } from '../utils/lyrics/lyricFileIssues';
 // src/hooks/useLibraryPlaybackController.ts
 
 type SetState<T> = Dispatch<SetStateAction<T>>;
+
+// 报告本地歌曲放不了（hostExtensionHooks.notifyPlaybackFailed）时用的歌曲。记录残缺、构造不出统一歌曲时报 null：
+// 报告本身不能在失败路径上再抛错。
+const toReportedLocalSong = (localSong: LocalSong): SongResult | null => {
+    try {
+        return buildUnifiedLocalSong({ localSong, matchedSong: null, coverUrl: null, preferOnlineMetadata: false });
+    } catch {
+        return null;
+    }
+};
 
 // A broken sidecar lyric file is reported once per song per session; the Folder tab keeps the details.
 const reportedLyricFileIssueSongIds = new Set<string>();
@@ -133,6 +145,8 @@ export function useLibraryPlaybackController({
     const [showNaviLyricMatchModal, setShowNaviLyricMatchModal] = useState(false);
     const [showOnlineLyricMatchModal, setShowOnlineLyricMatchModal] = useState(false);
     const managedCachedCoverObjectUrlRef = useRef<string | null>(null);
+    /** 库内播放（onPlayLocalSong / onPlayNavidromeSong）的递增请求 id：更新的库内播放取代还在等待的旧请求。 */
+    const libraryPlayRequestIdRef = useRef(0);
     const resolveLocalSongRecord = useCallback((song: SongResult | null | undefined): LocalSong | undefined => {
         const songId = (song as SongResult & { localRef?: { songId: string } } | null | undefined)?.localRef?.songId;
         return songId ? localSongs.find(localSong => localSong.id === songId) : undefined;
@@ -192,6 +206,24 @@ export function useLibraryPlaybackController({
         } catch (error) {
             console.error('Failed to load local songs:', error);
         }
+    }, []);
+
+    // 按 id 把给定的最新记录换进 localSongs，不重读整张 local_music 表。
+    // 内容与状态里那条相同的记录不换（库里读回的总是新对象，只比引用会每次都换），没有实际替换时保持原数组：
+    // localSongs 的引用一变，useLocalLibraryCatalog 就要整表重读目录，曲库视图也跟着重算。
+    const patchLocalSongsInState = useCallback((records: LocalSong[]) => {
+        if (records.length === 0) return;
+        const recordsById = new Map(records.map(record => [record.id, record]));
+        setLocalSongs(previous => {
+            let changed = false;
+            const next = previous.map(song => {
+                const record = recordsById.get(song.id);
+                if (!record || isSameLocalSongRecord(record, song)) return song;
+                changed = true;
+                return record;
+            });
+            return changed ? next : previous;
+        });
     }, []);
 
     const loadLocalPlaylists = useCallback(async () => {
@@ -393,20 +425,20 @@ export function useLibraryPlaybackController({
             try {
                 const { matchLyrics } = await import('../services/localMusicService');
                 await matchLyrics(localSong);
-                const updatedSongs = await getLocalSongs();
-                const found = updatedSongs.find(song => song.id === localSong.id);
-
-                if (found) {
-                    updatedLocalSong = found;
-                }
             } catch (error) {
                 console.warn('Auto-match failed:', error);
             }
-            await loadLocalSongs();
+            // 只把这一首的最新记录换进 localSongs。以前这里整表 loadLocalSongs，换掉了预热正在写的那批对象，
+            // 预热结果因此到不了下一次切歌；整表替换还会让依赖 localSongs 的曲库视图跟着全量重算。
+            const found = await getLocalSong(localSong.id);
+            if (found) {
+                updatedLocalSong = found;
+                patchLocalSongsInState([found]);
+            }
         }
 
         return { updatedLocalSong, matchedSongResult };
-    }, [loadLocalSongs, setStatusMsg]);
+    }, [patchLocalSongsInState, setStatusMsg]);
 
     const resolveLocalMetadataUI = useCallback(async (localData: LocalSong, matchedSong: SongResult | null) => {
         const localCoverUrl = getLocalCoverAssetUrl(localData.localCoverAssetId, 1024);
@@ -497,8 +529,10 @@ export function useLibraryPlaybackController({
         });
     }, [currentSong, persistLastPlaybackCache, playQueue, queueAddBehavior, resolveLocalMetadataUI, setPlayQueue, setStatusMsg, t]);
 
-    const prewarmLocalSongMetadata = useCallback(async (localSong: LocalSong) => {
+    // 预热一首本地歌曲的封面与在线匹配；可能写过库（提取了封面或跑过匹配）时返回 true，供调用方回写到 localSongs。
+    const prewarmLocalSongMetadata = useCallback(async (localSong: LocalSong): Promise<boolean> => {
         const preparedLocalSong = await ensureLocalSongCoverAsset(localSong);
+        const coverExtracted = preparedLocalSong !== localSong;
         Object.assign(localSong, preparedLocalSong);
 
         const onlineFirst = useLyricSettingsStore.getState().localLyricsPriority === 'online';
@@ -515,7 +549,9 @@ export function useLibraryPlaybackController({
             } catch (error) {
                 console.warn('[LocalPrewarm] Failed to prewarm local song metadata:', error);
             }
+            return true;
         }
+        return coverExtracted;
     }, []);
 
     const prewarmNearbyLocalSongs = useCallback((currentLocalSong: LocalSong, queue: LocalSong[] = []) => {
@@ -538,19 +574,29 @@ export function useLibraryPlaybackController({
 
         window.setTimeout(() => {
             void (async () => {
+                const touchedSongIds: string[] = [];
                 for (const nearbySong of nearbySongs) {
-                    await prewarmLocalSongMetadata(nearbySong);
+                    if (await prewarmLocalSongMetadata(nearbySong)) touchedSongIds.push(nearbySong.id);
                 }
+                // 预热结果必须回到 localSongs：队列与预热都从这里取记录，拿到旧快照就会重新提取封面、重新联网匹配。
+                // 等三首都做完才回写，此时才从库里读：每首做完就读的话，等后面几首联网匹配的这几秒里，
+                // 用户的改动或切到这首后的匹配写回会被这份更早的读覆盖回去。攒齐一次性回写，曲库视图只重算一次。
+                const records = await Promise.all(touchedSongIds.map(songId => getLocalSong(songId)));
+                patchLocalSongsInState(records.filter((record): record is LocalSong => Boolean(record)));
             })();
         }, 1000);
-    }, [prewarmLocalSongMetadata]);
+    }, [patchLocalSongsInState, prewarmLocalSongMetadata]);
 
-    const onPlayLocalSong = useCallback(async (localSong: LocalSong, queue: LocalSong[] = [], options: PlaybackNavigationOptions = {}) => {
+    const onPlayLocalSong = useCallback(async (localSong: LocalSong, queue: LocalSong[] = [], options: LibraryPlayOptions = {}) => {
+        const requestId = ++libraryPlayRequestIdRef.current;
         interruptStagePlaybackForMainTransition();
 
         const blobUrl = await getAudioFromLocalSong(localSong);
         if (!blobUrl) {
+            // 读文件期间用户换了歌：这次失败已不是用户眼前的事，不提示也不报告（见 LibraryPlayOptions.isCurrent）。
+            if (libraryPlayRequestIdRef.current !== requestId || options.isCurrent?.() === false) return;
             setStatusMsg({ type: 'error', text: t('status.localFileAccessError') || '' });
+            notifyPlaybackFailed({ song: toReportedLocalSong(localSong), reason: null, phase: 'play', willAutoSkip: false });
             return;
         }
 
@@ -682,14 +728,16 @@ export function useLibraryPlaybackController({
     const onPlayNavidromeSong = useCallback(async (
         navidromeSong: NavidromeSong,
         queue: NavidromeSong[] = [],
-        options: PlaybackNavigationOptions = {},
+        options: LibraryPlayOptions = {},
     ) => {
+        const requestId = ++libraryPlayRequestIdRef.current;
         interruptStagePlaybackForMainTransition();
 
         const shouldNavigateToPlayer = options.shouldNavigateToPlayer ?? true;
         const config = getNavidromeConfig();
         if (!config) {
             setStatusMsg({ type: 'error', text: 'Navidrome not configured' });
+            notifyPlaybackFailed({ song: navidromeSong, reason: null, phase: 'play', willAutoSkip: false });
             return;
         }
 
@@ -891,8 +939,12 @@ export function useLibraryPlaybackController({
             });
         } catch (error) {
             console.error('[App] Failed to play Navidrome song:', error);
-            setStatusMsg({ type: 'error', text: t('status.playbackFailed')});
             setIsLyricsLoading(false);
+            // 前面有好几次网络等待（匹配缓存、歌词、歌曲详情）：期间用户换了歌，这次失败就不提示也不报告（见 LibraryPlayOptions.isCurrent）。
+            if (libraryPlayRequestIdRef.current !== requestId || options.isCurrent?.() === false) return;
+            setStatusMsg({ type: 'error', text: t('status.playbackFailed')});
+            // 报告的是 Navidrome 载体本身（它就是 playSong 认得的 SongResult）：在这里重新构造统一歌曲可能因同一份残缺记录再抛错。
+            notifyPlaybackFailed({ song: navidromeSong, reason: null, phase: 'play', willAutoSkip: false });
         }
     }, [
         currentSongRef,

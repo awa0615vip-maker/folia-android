@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import type { ModExportProgress, ModFfmpegStatus, ModLogEntry, ModRuntimeInfo, ModRuntimeSnapshot } from './mods/types';
+import type { ModClearCacheResult, ModExportProgress, ModFfmpegStatus, ModLogEntry, ModRuntimeInfo, ModRuntimeSnapshot, ModStorageUsageResult } from './mods/types';
 
 declare global {
   const __COMMIT_HASH__: string;
@@ -9,6 +9,10 @@ declare global {
   const __BUILD_REPO__: string;
   /** 十六进制短 commit，拿不到时为 'dev'。 */
   const __BUILD_COMMIT__: string;
+  /** 构建类别 official / self-hosted / unofficial（见 dev/build/buildIdentity.mjs）。 */
+  const __BUILD_KIND__: string;
+  /** 自部署平台 docker / vercel / cloudflare；其他类别为空串。 */
+  const __BUILD_HOST__: string;
   const __APP_VERSION__: string;
   const __APP_VERSION_LABEL__: string;
   const __APP_RELEASE_CHANNEL__: string;
@@ -25,6 +29,7 @@ declare global {
   /** Unsaved AI settings sent by the "test connection" button. */
   interface AiConnectionTestPayload {
     provider: 'gemini' | 'openai';
+    /** Typed key; empty means "use the saved key", which only the main process can read. */
     apiKey: string;
     apiUrl?: string;
     model?: string;
@@ -164,6 +169,7 @@ declare global {
     app: ElectronAppEnvironment;
     backend: ElectronNeteaseApiStatus;
     startup: ElectronBackendStartupRun[];
+    /** 上游包没加载起来（startup 里 load 步骤失败）时为 null，identity 同理。 */
     login: {
       capturedAt: number;
       startup: { anonymousTokenAtLoad?: 'present' | 'empty' };
@@ -172,7 +178,7 @@ declare global {
         error?: string;
       };
       requests: ElectronNeteaseLoginRequestRecord[];
-    };
+    } | null;
     /**
      * 扫码身份轮换（electron/neteaseLoginIdentity.cjs）：进程启动时刻、当前 deviceId、扫码请求被重置的次数、
      * 实际轮换的次数（被重置后到下一次要码才换）、最近一次是否换到了新的匿名 token、是否还有待轮换。
@@ -185,7 +191,7 @@ declare global {
       lastRotatedAt: number | null;
       lastTokenRenewed: boolean | null;
       pendingRotation: boolean;
-    };
+    } | null;
     /** 最近的上游连接（不属于任何一次登录请求的那些，例如启动时取 xeapi 公钥）。 */
     connections: ElectronNetworkConnection[];
   }
@@ -256,7 +262,8 @@ declare global {
     | { type: 'start-export'; preset: ElectronVideoExportPreset; startMode: ElectronVideoExportStartMode }
     | { type: 'stop-export' }
     | { type: 'cancel-export' }
-    | { type: 'toggle-like' };
+    | { type: 'toggle-like' }
+    | import('./types/remoteControl').RemoteActionActivation;
 
   type ElectronVideoExportStatus =
     | 'idle'
@@ -288,17 +295,13 @@ declare global {
     error: string | null;
   }
 
-  interface ElectronWindowCaptureSource {
-    id: string;
-    name: string;
-  }
-
   interface ElectronSaveDialogResult {
     canceled: boolean;
     filePath: string | null;
   }
 
   interface ElectronRemoteControlSnapshot {
+    remoteActions?: import('./types/remoteControl').RemoteActionsSnapshot;
     hasTrack: boolean;
     trackKey: string | null;
     title: string | null;
@@ -968,11 +971,15 @@ declare global {
         displayName?: string,
       ) => Promise<ElectronSaveDialogResult>;
       reportDevicePixelRatio: (ratio: number) => Promise<void>;
-      getMainWindowCaptureSource: () => Promise<ElectronWindowCaptureSource | null>;
       // Returns `false` when the resize could not be prepared, otherwise the resolved DPR.
-      prepareVideoExportWindow: (size: { width: number; height: number }) => Promise<false | { success: boolean; dpr: number }>;
+      prepareVideoExportWindow: (size: { width: number; height: number; dpr?: number }) => Promise<false | { success: boolean; dpr: number }>;
       restoreVideoExportWindow: () => Promise<boolean>;
-      writeVideoExportFile: (filePath: string, data: ArrayBuffer) => Promise<boolean>;
+      // Chunked export file writing: open returns a session id, chunks are appended in order,
+      // finish renames the partial file onto the chosen path, abort deletes it.
+      openVideoExportFile: (filePath: string) => Promise<string>;
+      appendVideoExportChunk: (sessionId: string, data: ArrayBuffer) => Promise<number>;
+      finishVideoExportFile: (sessionId: string) => Promise<{ filePath: string; bytesWritten: number; finalized: boolean }>;
+      abortVideoExportFile: (sessionId: string) => Promise<boolean>;
       getStageStatus: () => Promise<StageStatus>;
       setStageEnabled: (enabled: boolean) => Promise<StageStatus>;
       regenerateStageToken: () => Promise<StageStatus>;
@@ -1001,6 +1008,8 @@ declare global {
         getFfmpegStatus: () => Promise<{ ffmpeg: ModFfmpegStatus }>;
         openModsDirectory: () => Promise<{ ok: boolean; directory?: string; error?: string }>;
         installModFromZip: (zipPath: string) => Promise<{ ok: boolean; id?: string; error?: string }>;
+        getModStorageUsage: (modId: string) => Promise<ModStorageUsageResult>;
+        clearModCache: (modId: string) => Promise<ModClearCacheResult>;
         onModsStateChanged: (callback: (mods: ModRuntimeInfo[]) => void) => () => void;
         onExportProgress: (callback: (progress: ModExportProgress) => void) => () => void;
         onModLog: (callback: (entry: ModLogEntry) => void) => () => void;

@@ -1,11 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // test/unit/onlineMusic/qqProvider.test.ts
 
 const requestMock = vi.hoisted(() => vi.fn());
 const clearSessionMock = vi.hoisted(() => vi.fn());
 const writeSessionValueMock = vi.hoisted(() => vi.fn());
-const searchQQLyricsMock = vi.hoisted(() => vi.fn());
+const searchQQSongsMock = vi.hoisted(() => vi.fn());
 const fetchQQLyricsMock = vi.hoisted(() => vi.fn());
 const transportState = vi.hoisted(() => ({ hasSession: true }));
 
@@ -22,7 +22,7 @@ vi.mock('@/services/onlineMusic/providerStorage', () => ({
 }));
 
 vi.mock('@/utils/lyrics/providers/qqLyricProvider', () => ({
-    searchQQLyrics: searchQQLyricsMock,
+    searchQQSongs: searchQQSongsMock,
     fetchQQLyrics: fetchQQLyricsMock,
 }));
 
@@ -160,23 +160,31 @@ describe('qqProvider', () => {
         requestMock.mockReset();
         clearSessionMock.mockReset();
         writeSessionValueMock.mockReset();
-        searchQQLyricsMock.mockReset();
+        searchQQSongsMock.mockReset();
         fetchQQLyricsMock.mockReset();
         transportState.hasSession = true;
         resetQqProviderRuntimeCache();
     });
 
-    it('declares readable library features without exposing unsupported mutations or recommendations', () => {
+    // 3.3.0 开放了推荐、歌单增删与收藏歌单，3.3.1 补上红心与收藏专辑；不喜欢与历史日推后端还没有，不能冒出来。
+    it('declares the 3.3.1 recommendations and mutations without the ones the backend lacks', () => {
         expect(qqProvider.capabilities).toMatchObject({
             userLibrary: true,
             playlists: true,
             userAlbums: true,
             likes: true,
-            recommendations: false,
-            mutations: false,
+            recommendations: true,
+            mutations: true,
+            playlistTrackMutations: true,
+            playlistSubscription: true,
         });
-        expect(qqProvider.mutations).toBeUndefined();
-        expect(qqProvider.recommendations).toBeUndefined();
+        expect(qqProvider.capabilities.personalFmModes).toBeFalsy();
+        expect(qqProvider.capabilities.historyRecommendations).toBeFalsy();
+        expect(Object.keys(qqProvider.recommendations ?? {}).sort()).toEqual(['getDailySongs', 'getPersonalFm', 'getRecommendedCollections']);
+        expect(Object.keys(qqProvider.mutations ?? {}).sort()).toEqual([
+            'canAddToPlaylist', 'canEditPlaylistTracks', 'likeSong', 'subscribeAlbum', 'subscribePlaylist', 'updatePlaylistTracks',
+        ]);
+        expect(qqProvider.catalog?.getSubscriptionStatus).toBeTypeOf('function');
     });
 
     it('normalizes a song onto songmid identity and keeps the numeric id in provider data', () => {
@@ -284,6 +292,7 @@ describe('qqProvider', () => {
             type: 'playlist',
             coverUrl: 'https://img.example.test/big.jpg',
             trackCount: 2,
+            isOwned: true,
             providerData: { tid: 7, dirId: 201, owned: true },
             isLiked: true,
         });
@@ -401,6 +410,96 @@ describe('qqProvider', () => {
         });
     });
 
+    describe('device limit (upstream 20279)', () => {
+        const validationFailure = {
+            code: 800,
+            message: 'QR login failed',
+            failureStage: 'credential-validation',
+            failureReason: 'upstream-rejected',
+            upstreamCode: 1000,
+        };
+        const exchangeResult = (at: number, upstreamCode: number) => ({
+            at, level: 'info', event: 'qq-auth.upstream-result',
+            details: { phase: 'credential-exchange', httpStatus: 200, globalCode: 0, upstreamCode },
+        });
+        const stubDesktop = (authEvents: unknown[]) => {
+            const getLoginDiagnostics = vi.fn().mockResolvedValue({ providerId: 'qq', authEvents });
+            vi.stubGlobal('window', { electron: { getLoginDiagnostics } });
+            return getLoginDiagnostics;
+        };
+        const requestKey = async () => {
+            requestMock.mockResolvedValueOnce({ data: { unikey: 'qr-key' } });
+            await qqProvider.auth!.getQrKey!();
+        };
+
+        afterEach(() => {
+            vi.unstubAllGlobals();
+        });
+
+        // 微信通道的凭据交换没有回退：20279 直接在响应上。
+        it('reads the device limit straight off the response', async () => {
+            requestMock.mockResolvedValueOnce({ ...validationFailure, failureStage: 'credential-exchange', upstreamCode: 20279 });
+            await expect(qqProvider.auth!.checkQr!('qr-key')).resolves.toMatchObject({ state: 'error', reason: 'device-limit' });
+        });
+
+        // QQ 通道：响应里只剩验证那一步的 1000，20279 在主进程记下的本轮凭据交换里。
+        it('finds the device limit in this round\'s credential exchange on desktop', async () => {
+            await requestKey();
+            const getLoginDiagnostics = stubDesktop([exchangeResult(Date.now() + 1000, 20279)]);
+            requestMock.mockResolvedValueOnce(validationFailure);
+
+            await expect(qqProvider.auth!.checkQr!('qr-key')).resolves.toMatchObject({ state: 'error', reason: 'device-limit' });
+            expect(getLoginDiagnostics).toHaveBeenCalledWith('qq');
+        });
+
+        it('ignores an exchange from an earlier round and a different exchange code', async () => {
+            await requestKey();
+            stubDesktop([exchangeResult(1, 20279)]);
+            requestMock.mockResolvedValueOnce(validationFailure);
+            expect(await qqProvider.auth!.checkQr!('qr-key')).not.toHaveProperty('reason');
+
+            stubDesktop([exchangeResult(Date.now() + 1000, 20279), exchangeResult(Date.now() + 2000, 50006)]);
+            requestMock.mockResolvedValueOnce(validationFailure);
+            expect(await qqProvider.auth!.checkQr!('qr-key')).not.toHaveProperty('reason');
+        });
+
+        // 3.3.0：QQ 通道被再验证盖掉的换凭证结果在 primaryFailure 里，网页版也认得出来，不必问主进程。
+        it('reads the device limit out of primaryFailure without asking the desktop', async () => {
+            const getLoginDiagnostics = stubDesktop([]);
+            requestMock.mockResolvedValueOnce({
+                ...validationFailure,
+                fallbackAttempted: true,
+                primaryFailure: { failureStage: 'credential-exchange', failureReason: 'upstream-rejected', upstreamCode: 20279, upstreamErrorKey: 'auth.device-limit' },
+            });
+
+            await expect(qqProvider.auth!.checkQr!('qr-key')).resolves.toMatchObject({ state: 'error', reason: 'device-limit' });
+            expect(getLoginDiagnostics).not.toHaveBeenCalled();
+        });
+
+        // 登记过的错误键与上游码等价：后端只在通道、步骤、码都对得上时才给。
+        it('takes the registered error key as the device limit', async () => {
+            requestMock.mockResolvedValueOnce({ ...validationFailure, failureStage: 'credential-exchange', upstreamCode: undefined, upstreamErrorKey: 'auth.device-limit' });
+            await expect(qqProvider.auth!.checkQr!('qr-key')).resolves.toMatchObject({ state: 'error', reason: 'device-limit' });
+
+            requestMock.mockResolvedValueOnce({
+                ...validationFailure,
+                primaryFailure: { failureStage: 'credential-exchange', upstreamCode: 50006 },
+                failureHint: { key: 'login.wrong-scan-app', message: 'Use mobile QQ to scan' },
+            });
+            expect(await qqProvider.auth!.checkQr!('qr-key')).not.toHaveProperty('reason');
+        });
+
+        // 网页版没有主进程可问；取快照失败也只是少了这条提示。
+        it('falls back to a plain failure without a desktop snapshot', async () => {
+            requestMock.mockResolvedValueOnce(validationFailure);
+            expect(await qqProvider.auth!.checkQr!('qr-key')).not.toHaveProperty('reason');
+
+            vi.stubGlobal('window', { electron: { getLoginDiagnostics: vi.fn().mockRejectedValue(new Error('ipc closed')) } });
+            requestMock.mockResolvedValueOnce(validationFailure);
+            expect(await qqProvider.auth!.checkQr!('qr-key')).not.toHaveProperty('reason');
+        });
+    });
+
     it('passes every backend failure field through as written, including categories it does not know yet', async () => {
         requestMock.mockResolvedValueOnce({
             code: 800,
@@ -411,6 +510,10 @@ describe('qqProvider', () => {
             upstreamGlobalCode: -1,
             retryAfterMs: 30000,
             lastFailure: { failureStage: 'device-bootstrap', failureReason: 'upstream-rejected', upstreamCode: -30002 },
+            upstreamErrorKey: 'auth.some-future-key',
+            failureHint: { key: 'login.some-future-hint', message: 'Something new' },
+            primaryFailure: { failureStage: 'credential-exchange', upstreamCode: 12345 },
+            fallbackAttempted: true,
         });
 
         await expect(qqProvider.auth!.checkQr!('qr-key')).resolves.toEqual({
@@ -426,6 +529,10 @@ describe('qqProvider', () => {
                 upstreamGlobalCode: -1,
                 retryAfterMs: 30000,
                 lastFailure: { failureStage: 'device-bootstrap', failureReason: 'upstream-rejected', upstreamCode: -30002 },
+                upstreamErrorKey: 'auth.some-future-key',
+                failureHint: { key: 'login.some-future-hint', message: 'Something new' },
+                primaryFailure: { failureStage: 'credential-exchange', upstreamCode: 12345 },
+                fallbackAttempted: true,
             },
         });
     });
@@ -661,8 +768,16 @@ describe('qqProvider', () => {
         expect(clearSessionMock).toHaveBeenCalledTimes(2);
     });
 
+    // 网页上的单曲页按 songmid 定位，与网易云的 `getSongPageUrl` 同一份契约：拿不到 songmid 就不给链接。
+    it('links a song to its QQ Music web page by songmid', () => {
+        expect(qqProvider.getSongPageUrl?.(normalizeQqSong(SEARCH_ITEM))).toBe('https://y.qq.com/n/ryqq/songDetail/003rJSwm3TechU');
+        expect(qqProvider.getSongPageUrl?.(normalizeQqSong({ ...SEARCH_ITEM, mid: '' }))).toBeNull();
+    });
+
     it('routes search and lyrics through the existing QQ modules', async () => {
-        searchQQLyricsMock.mockResolvedValue([{
+        // 没有会话时搜索走匿名直连；带会话的路径见 qqSearch.test.ts。
+        transportState.hasSession = false;
+        searchQQSongsMock.mockResolvedValue([{
             id: 5105918,
             name: '海阔天空',
             artists: [{ id: 4558, name: 'Beyond' }],
@@ -673,8 +788,9 @@ describe('qqProvider', () => {
         fetchQQLyricsMock.mockResolvedValue({ lines: [], isWordByWord: true });
 
         const page = await qqProvider.search!.searchSongs('海阔天空', 20, 20);
-        expect(searchQQLyricsMock).toHaveBeenCalledWith('海阔天空', 2, 20);
-        expect(page).toMatchObject({ hasMore: false, nextOffset: 21 });
+        expect(searchQQSongsMock).toHaveBeenCalledWith('海阔天空', 2, 20);
+        expect(requestMock).not.toHaveBeenCalled();
+        expect(page).toMatchObject({ hasMore: false, nextOffset: 40 });
         expect(page.items[0]?.sourceRef).toMatchObject({ providerId: 'qq', mediaId: '003rJSwm3TechU' });
 
         // The lyric module needs the numeric song id, which only lives in provider data after normalization.
@@ -705,6 +821,263 @@ describe('qqProvider', () => {
             ['music_play', { songmid: '003rJSwm3TechU', mediaId: '001MediaMidFixture', quality: 'flac' }],
             ['music_play', { songmid: '003rJSwm3TechU', mediaId: '001MediaMidFixture', quality: '320' }],
         ]);
+    });
+
+    describe('audio source failures', () => {
+        const SONG = normalizeQqSong(SEARCH_ITEM);
+        // 后端把每个文件的原因都换成了这一句固定文案（qrLogin.js:482-495），它证明不了会员、地区或下架。
+        const EMPTY_PLAY_LINK = { data: { playUrl: { '003rJSwm3TechU': { url: '', error: '暂无播放链接' } } } };
+        const PLAYABLE = { data: { playUrl: { '003rJSwm3TechU': { url: 'https://audio.example.test/song.mp3' } } } };
+
+        const rejectionOf = async (promise: Promise<unknown>): Promise<OnlineProviderError> => {
+            const error = await promise.then(() => null, (failure: unknown) => failure);
+            expect(error).toBeInstanceOf(OnlineProviderError);
+            return error as OnlineProviderError;
+        };
+
+        beforeEach(() => {
+            vi.spyOn(console, 'warn').mockImplementation(() => { });
+        });
+
+        afterEach(() => {
+            vi.restoreAllMocks();
+        });
+
+        it('summarizes three empty play links as not-playable with one attempt per quality', async () => {
+            requestMock.mockResolvedValue(EMPTY_PLAY_LINK);
+
+            const error = await rejectionOf(qqProvider.playback!.getAudioSource(SONG, 'lossless'));
+
+            expect(error).toMatchObject({ code: 'not-playable', providerId: 'qq' });
+            expect(error.details?.attempts).toEqual([
+                { stage: 'music_play', quality: 'lossless', outcome: 'empty', detail: '暂无播放链接' },
+                { stage: 'music_play', quality: 'high', outcome: 'empty', detail: '暂无播放链接' },
+                { stage: 'music_play', quality: 'standard', outcome: 'empty', detail: '暂无播放链接' },
+            ]);
+            expect(error.details?.signInMayHelp).toBe(false);
+            expect(requestMock).toHaveBeenCalledTimes(3);
+        });
+
+        it('hints that signing in may help only when there is no session and the backend issued empty links', async () => {
+            transportState.hasSession = false;
+            requestMock.mockResolvedValue(EMPTY_PLAY_LINK);
+
+            const error = await rejectionOf(qqProvider.playback!.getAudioSource(SONG, 'high'));
+
+            expect(error).toMatchObject({ code: 'not-playable', details: { signInMayHelp: true } });
+            // 只是提示，不能断定为鉴权失败。
+            expect(error.code).not.toBe('auth-required');
+        });
+
+        it('treats a playUrl without any entry as an invalid response', async () => {
+            transportState.hasSession = false;
+            requestMock.mockResolvedValue({ data: { playUrl: {} } });
+
+            const error = await rejectionOf(qqProvider.playback!.getAudioSource(SONG, 'lossless'));
+
+            expect(error).toMatchObject({ code: 'invalid-response', providerId: 'qq' });
+            expect(error.details?.attempts).toHaveLength(3);
+            expect(error.details?.attempts?.every(attempt => attempt.code === 'invalid-response')).toBe(true);
+            // 形态坏掉的应答不是「没给链接」，登录提示无从谈起。
+            expect(error.details?.signInMayHelp).toBe(false);
+        });
+
+        it('treats a missing or non-object playUrl as an invalid response', async () => {
+            requestMock
+                .mockResolvedValueOnce({ data: {} })
+                .mockResolvedValueOnce({ data: { playUrl: 'https://audio.example.test/song.mp3' } });
+
+            await expect(qqProvider.playback!.getAudioSource(SONG, 'high')).rejects.toMatchObject({
+                code: 'invalid-response',
+            });
+            expect(requestMock).toHaveBeenCalledTimes(2);
+        });
+
+        it('rejects a song without a songmid as an invalid response before issuing any request', async () => {
+            const song = {
+                ...SONG,
+                qqMid: undefined,
+                sourceRef: { kind: 'local' as const, mediaId: 'file-1' },
+            };
+
+            await expect(qqProvider.playback!.getAudioSource(song, 'lossless')).rejects.toMatchObject({
+                code: 'invalid-response',
+                message: 'QQ song has no songmid',
+                providerId: 'qq',
+            });
+            expect(requestMock).not.toHaveBeenCalled();
+        });
+
+        it('stops at the first throttled request and keeps its cooldown', async () => {
+            const throttled = new OnlineProviderError(
+                'network', 'QQMusicApi music_play failed: HTTP 429', 'qq', { code: 429 }, 429, 25_000,
+            );
+            requestMock.mockRejectedValue(throttled);
+
+            const error = await rejectionOf(qqProvider.playback!.getAudioSource(SONG, 'lossless'));
+
+            expect(error).toMatchObject({ code: 'rate-limited', httpStatus: 429, retryAfterMs: 25_000, cause: throttled });
+            expect(requestMock).toHaveBeenCalledTimes(1);
+        });
+
+        it('stops at the first request when the backend is unavailable', async () => {
+            requestMock.mockRejectedValue(new OnlineProviderError(
+                'unavailable', 'VITE_QQ_API_BASE is not configured', 'qq',
+                undefined, undefined, undefined, { stage: 'config', transient: false },
+            ));
+
+            const error = await rejectionOf(qqProvider.playback!.getAudioSource(SONG, 'lossless'));
+
+            expect(error).toMatchObject({ code: 'unavailable', details: { transient: false } });
+            expect(requestMock).toHaveBeenCalledTimes(1);
+        });
+
+        it('stops at the first timed-out request because QQ has no alternative endpoint', async () => {
+            requestMock.mockRejectedValue(new OnlineProviderError('timeout', 'QQMusicApi music_play timed out', 'qq'));
+
+            await expect(qqProvider.playback!.getAudioSource(SONG, 'lossless')).rejects.toMatchObject({
+                code: 'timeout',
+            });
+            expect(requestMock).toHaveBeenCalledTimes(1);
+        });
+
+        it('degrades past a network failure and returns the next quality that has a URL', async () => {
+            requestMock
+                .mockRejectedValueOnce(new OnlineProviderError('network', 'QQMusicApi music_play unreachable: Failed to fetch', 'qq'))
+                .mockResolvedValueOnce(PLAYABLE);
+
+            await expect(qqProvider.playback!.getAudioSource(SONG, 'lossless')).resolves.toEqual({
+                url: 'https://audio.example.test/song.mp3',
+                fetchedAt: expect.any(Number),
+                quality: 'high',
+            });
+            expect(requestMock).toHaveBeenCalledTimes(2);
+        });
+
+        it('rethrows the very same auth-required instance from a lower quality', async () => {
+            const authError = new OnlineProviderError('auth-required', 'QQMusicApi login required', 'qq', undefined, 401);
+            requestMock
+                .mockResolvedValueOnce(EMPTY_PLAY_LINK)
+                .mockRejectedValueOnce(authError);
+
+            const error = await qqProvider.playback!.getAudioSource(SONG, 'lossless').catch((thrown: unknown) => thrown);
+
+            expect(error).toBe(authError);
+            expect(requestMock).toHaveBeenCalledTimes(2);
+        });
+
+        it('lets a 500 outrank the empty links that follow it', async () => {
+            const serverError = new OnlineProviderError(
+                'network', 'QQMusicApi music_play failed: HTTP 500 (get-music-play failed)', 'qq', { error: 'get-music-play failed' }, 500,
+            );
+            requestMock
+                .mockRejectedValueOnce(serverError)
+                .mockResolvedValue(EMPTY_PLAY_LINK);
+
+            const error = await rejectionOf(qqProvider.playback!.getAudioSource(SONG, 'lossless'));
+
+            // 暂时性失败优先于「没给链接」：结论是服务异常级别（汇总把严重度规整成 service-unavailable，保留那次的 500），提示重试。
+            expect(error).toMatchObject({ code: 'service-unavailable', httpStatus: 500, cause: serverError });
+            expect(error.details?.attempts).toEqual([
+                expect.objectContaining({ quality: 'lossless', outcome: 'error', code: 'network', httpStatus: 500 }),
+                expect.objectContaining({ quality: 'high', outcome: 'empty' }),
+                expect.objectContaining({ quality: 'standard', outcome: 'empty' }),
+            ]);
+            expect(requestMock).toHaveBeenCalledTimes(3);
+        });
+
+        // 后端把上游业务拒绝（QqProtocolError）包成 500，transport 据正文认出后不带 httpStatus、带上游码：
+        // 每档都这样时结论是「没给可播放音源」（unknown），不是服务异常，也就不会触发 provider 冷却。
+        it('reads upstream business refusals on every quality as not playable rather than a service outage', async () => {
+            const refusal = () => new OnlineProviderError(
+                'network', 'QQMusicApi music_play failed: HTTP 500 (get-music-play failed (HTTP 200, global=0, code=104003))', 'qq',
+                { error: 'get-music-play failed (HTTP 200, global=0, code=104003)' }, undefined, undefined,
+                { stage: 'upstream', upstreamCode: 104003 },
+            );
+            requestMock.mockImplementation(async () => { throw refusal(); });
+
+            const error = await rejectionOf(qqProvider.playback!.getAudioSource(SONG, 'lossless'));
+
+            expect(requestMock).toHaveBeenCalledTimes(3);
+            expect(error.code).toBe('not-playable');
+            expect(error.httpStatus).toBeUndefined();
+            expect(error.details?.attempts).toEqual([
+                expect.objectContaining({ quality: 'lossless', outcome: 'error', code: 'network', upstreamCode: 104003 }),
+                expect.objectContaining({ quality: 'high', outcome: 'error', code: 'network', upstreamCode: 104003 }),
+                expect.objectContaining({ quality: 'standard', outcome: 'error', code: 'network', upstreamCode: 104003 }),
+            ]);
+            const { classifyPlaybackError } = await import('@/services/playbackRecovery/onlinePlaybackFailure');
+            expect(classifyPlaybackError(error, { stage: 'resolve-url', providerId: 'qq' }).reason).toBe('unknown');
+        });
+
+        // 3.3.0 的 restriction：数字码只进诊断，hint.key 只有 maybe-* 两种算「可能」原因，而且只认最后一档（标准音质）的。
+        const restricted = (hintKey: string, codes: Record<string, number> = { result: 104003, subcode: 1 }) => ({
+            data: { playUrl: { '003rJSwm3TechU': {
+                url: '',
+                error: '暂无播放链接',
+                restriction: { key: 'url_unavailable', evidence: 'observed-response', codes, hint: { key: hintKey, message: 'Preset English text' } },
+            } } },
+        });
+
+        it('keeps the restriction codes and hint key as diagnostics on each empty attempt', async () => {
+            requestMock.mockResolvedValue(restricted('playback.reason-unconfirmed'));
+
+            const error = await rejectionOf(qqProvider.playback!.getAudioSource(SONG, 'high'));
+
+            expect(error.code).toBe('not-playable');
+            expect(error.details?.attempts).toEqual([
+                { stage: 'music_play', quality: 'high', outcome: 'empty', upstreamCode: 104003, detail: '暂无播放链接 [playback.reason-unconfirmed; result=104003 subcode=1]' },
+                { stage: 'music_play', quality: 'standard', outcome: 'empty', upstreamCode: 104003, detail: '暂无播放链接 [playback.reason-unconfirmed; result=104003 subcode=1]' },
+            ]);
+            expect(error.details?.likelyCause).toBeUndefined();
+        });
+
+        it.each([
+            ['playback.maybe-membership', 'membership', 'status.songTemporarilyUnavailableMaybeMembership'],
+            ['playback.maybe-region-restricted', 'region', 'status.songTemporarilyUnavailableMaybeRegion'],
+        ] as const)('turns %s on the standard tier into a possible cause, never a definite reason', async (hintKey, cause, messageKey) => {
+            requestMock
+                .mockResolvedValueOnce(restricted('playback.reason-unconfirmed'))
+                .mockResolvedValueOnce(restricted(hintKey));
+
+            const error = await rejectionOf(qqProvider.playback!.getAudioSource(SONG, 'high'));
+
+            expect(error).toMatchObject({ code: 'not-playable', details: { likelyCause: cause } });
+            const { classifyPlaybackError } = await import('@/services/playbackRecovery/onlinePlaybackFailure');
+            const { getPlaybackFailureMessage } = await import('@/services/playbackRecovery/playbackFailurePolicy');
+            const failure = classifyPlaybackError(error, { stage: 'resolve-url', providerId: 'qq' });
+            expect(failure.reason).toBe('unknown');
+            expect(getPlaybackFailureMessage(failure).key).toBe(messageKey);
+        });
+
+        // 可能原因只看最后一档：最后一档是网络错误时，前面档位的提示不能代表这次失败。
+        // 最后一档用不算暂时性的失败：结论仍是 not-playable，可能原因要靠 adapter 自己清掉，汇总不会替它挡。
+        it.each([
+            ['throws a non-transient error', () => requestMock.mockRejectedValueOnce(new OnlineProviderError('invalid-response', 'QQMusicApi music_play body unreadable', 'qq'))],
+            ['answers without an entry', () => requestMock.mockResolvedValueOnce({ data: { playUrl: {} } })],
+        ])('drops a possible cause when the last tier %s', async (_label, failLastTier) => {
+            requestMock.mockResolvedValueOnce(restricted('playback.maybe-membership'));
+            failLastTier();
+
+            const error = await rejectionOf(qqProvider.playback!.getAudioSource(SONG, 'high'));
+
+            expect(error.code).toBe('not-playable');
+            expect(error.details?.likelyCause).toBeUndefined();
+        });
+
+        it('never turns an empty play link into a takedown, membership, region or preview reason', async () => {
+            transportState.hasSession = false;
+            requestMock.mockResolvedValue(EMPTY_PLAY_LINK);
+
+            const error = await rejectionOf(qqProvider.playback!.getAudioSource(SONG, 'hires'));
+
+            expect([
+                'taken-down', 'membership-required', 'purchase-required', 'entitlement-required',
+                'region-restricted', 'preview-only',
+            ]).not.toContain(error.code);
+            // QQ 不声明歌曲级的静态可用性，运行时失败也不会回写到那里。
+            expect(qqProvider.playback?.getAvailability).toBeUndefined();
+        });
     });
 
     it('loads regular playlists normally but uses the encrypted-UIN endpoint for liked songs', async () => {
@@ -1220,7 +1593,7 @@ describe('qqProvider', () => {
             wordByWordLyrics: true,
             playback: true,
             likes: true,
-            mutations: false,
+            mutations: true,
         });
         expect(qqProvider.playback).toBeDefined();
         expect(qqProvider.catalog?.getPlaylistTracks).toBeTypeOf('function');

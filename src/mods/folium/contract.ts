@@ -7,7 +7,7 @@
 // Removing a field or changing its meaning requires folium 2.
 
 /** The Folium version this host implements; mods read it at runtime as `folium.host.folium`. */
-export const FOLIUM_VERSION = Object.freeze({ major: 1, minor: 4 });
+export const FOLIUM_VERSION = Object.freeze({ major: 1, minor: 5 });
 
 /** `modid:name`, like a Forge ResourceLocation. The mod id part is added by the host. */
 export type FoliumId = string;
@@ -224,6 +224,35 @@ export interface FoliumSong {
 /** The host player state. */
 export type FoliumPlaybackState = 'playing' | 'paused' | 'stopped';
 
+/** Folium 1.5: the repeat mode. `all` repeats the queue, `one` the current song. */
+export type FoliumLoopMode = 'off' | 'all' | 'one';
+
+/** Folium 1.5: one entry of the play queue, as `folium.playback.getQueue()` lists it. */
+export interface FoliumQueueItem {
+    /** The song; its `ref` works with playSong, enqueue and playQueueItem. */
+    readonly song: FoliumSong;
+    /** Its position in the host queue; stale as soon as the queue changes (`playback.queueChanged`). */
+    readonly index: number;
+}
+
+/** Folium 1.5: a page of the play queue, from `folium.playback.getQueue()`. */
+export interface FoliumQueueSnapshot {
+    /** The requested page, in queue order; each item carries its absolute `index`. */
+    readonly items: readonly FoliumQueueItem[];
+    /** Songs in the whole queue, not just this page. */
+    readonly length: number;
+    /**
+     * Position of the displayed song in the queue; -1 when it is not in it. The host finds the current
+     * song by identity, so a song listed twice counts at its first position.
+     */
+    readonly currentIndex: number;
+    /**
+     * `queue`: the play queue. `fm`: Personal FM, whose queue is the current FM batch. `stage`: external
+     * Stage playback; the queue has nothing to do with what is playing, and playQueueItem refuses.
+     */
+    readonly kind: 'queue' | 'fm' | 'stage';
+}
+
 /** The whole playback picture, as main entries read it with `api.runtime.getPlaybackSnapshot()`. */
 export interface FoliumPlaybackSnapshot {
     /** The displayed song. */
@@ -240,6 +269,12 @@ export interface FoliumPlaybackSnapshot {
     theme: FoliumTheme | null;
     /** The current lyric animation mode id. */
     visualizerMode: string | null;
+    /** Folium 1.5: output volume, 0–1. */
+    volume: number;
+    /** Folium 1.5: the mute switch, separate from `volume`. */
+    muted: boolean;
+    /** Folium 1.5: the repeat mode. */
+    loopMode: FoliumLoopMode;
 }
 
 /**
@@ -527,7 +562,13 @@ export interface FoliumStageContext {
     getSettings(): FoliumParamValues;
     /** What the host draws around this content. */
     getSurface(): FoliumSurface;
-    /** Called when the line index, pause, theme, subtitle theme, cover, display, settings or surface change. */
+    /**
+     * EXPERIMENTAL (`player.layout`): frozen live-player geometry in viewport CSS pixels.
+     * Null without the manifest opt-in, outside the live player (including previews, OBS and export),
+     * or before a subscriber's first measurement. Reading never starts measurement.
+     */
+    getLayout(): FoliumPlayerLayout | null;
+    /** Called when the line index, pause, theme, subtitle theme, cover, display, settings, surface or opted-in layout change. */
     subscribe(listener: () => void): FoliumDisposer;
     /** Folium 1.2. */
     readonly audio: FoliumAudio;
@@ -685,6 +726,18 @@ export interface FoliumPlayerPanelTabDef {
     mount: FoliumMount<FoliumPanelContext>;
 }
 
+/** Folium 1.5: an owned full-page tab appended to Grid and Bravais home navigation. */
+export interface FoliumHomeTabDef {
+    /** Local id; pass it to `folium.ui.openHomeTab`. */
+    id: string;
+    /** Localized navigation label. */
+    label: FoliumLabel;
+    /** Order among contributed home tabs; default 500. Native tabs retain their order. */
+    order?: number;
+    /** Mounts in an isolated, bounded full-page container. Returns cleanup on leaving the page. */
+    mount: FoliumMount<FoliumPanelContext>;
+}
+
 /** Progress-bar context shared by control buttons and progress layers. */
 export interface FoliumProgressContext {
     /** The playback clock (audio time). */
@@ -767,7 +820,7 @@ export interface FoliumRegistry<Def, Handle extends FoliumRegistryHandle = Foliu
 }
 
 /**
- * All registries, as `folium.registries`. UI-only ones (commands, stageLayers, playerPanelTabs,
+ * All registries, as `folium.registries`. UI-only ones (commands, stageLayers, playerPanelTabs, homeTabs,
  * controlButtons, progressLayers, styles) accept registrations and do nothing in the export window.
  */
 export interface FoliumRegistries {
@@ -785,6 +838,8 @@ export interface FoliumRegistries {
     settingsSections: FoliumRegistry<FoliumSettingsSectionDef, FoliumSettingsSectionHandle>;
     /** Player panel tabs. */
     playerPanelTabs: FoliumRegistry<FoliumPlayerPanelTabDef>;
+    /** Folium 1.5: full pages in home navigation; inert outside the main window. */
+    homeTabs: FoliumRegistry<FoliumHomeTabDef>;
     /** Progress bar buttons. */
     controlButtons: FoliumRegistry<FoliumControlButtonDef>;
     /** Layers over the progress track. */
@@ -797,6 +852,14 @@ export interface FoliumRegistries {
 
 /** Handler order for one event type; handlers of the same priority run in registration order. */
 export type FoliumEventPriority = 'highest' | 'high' | 'normal' | 'low' | 'lowest';
+
+/**
+ * Folium 1.5: why a song failed to play, coarsely. `auth`: sign-in needed or expired. `restricted`:
+ * membership, purchase, entitlement, preview-only or region. `taken-down`: no longer offered. `network`:
+ * network, timeout, service unavailable or rate limited. `unknown`: anything else. The host's own reason
+ * codes are not API.
+ */
+export type FoliumPlaybackFailureReason = 'auth' | 'restricted' | 'taken-down' | 'network' | 'unknown';
 
 /** Read-only notifications, emitted after the fact. */
 export interface FoliumNotificationEvents {
@@ -816,6 +879,31 @@ export interface FoliumNotificationEvents {
     'theme.changed': { readonly theme: FoliumTheme };
     /** Folium 1.3: `playback.getState().liked` changed (a like or unlike, or a new song). */
     'playback.likeChanged': { readonly liked: boolean };
+    /** Folium 1.5: the volume or the mute switch changed, whoever changed it. */
+    'playback.volumeChanged': { readonly volume: number; readonly muted: boolean };
+    /** Folium 1.5: the repeat mode changed. */
+    'playback.loopModeChanged': { readonly mode: FoliumLoopMode };
+    /**
+     * Folium 1.5: the queue changed, or the displayed song moved within it. Only the outline: call
+     * `playback.getQueue()` for the songs. Changes made in one task arrive as one event.
+     */
+    'playback.queueChanged': { readonly length: number; readonly currentIndex: number };
+    /**
+     * Folium 1.5: a song failed to play; reported once, after the host's own retries. `phase` says
+     * where it failed: `play`, the host got no playable source for the song just picked (sign-in,
+     * membership, taken down, the address lookup failed, a missing local file); `restore`, the same
+     * while restoring the last session; `mid-playback`, the player failed on the media itself (it
+     * would not load, decode or keep streaming). Every media error is `mid-playback`, so a song
+     * just picked or restored that fails before any sound is reported as `mid-playback` too.
+     * `willAutoSkip`: the host is counting down to skip it (its policy or the user's "skip unplayable
+     * songs" setting), so do not call `next()` yourself. Not emitted in the export window.
+     */
+    'playback.failed': {
+        readonly song: FoliumSong | null;
+        readonly reason: FoliumPlaybackFailureReason;
+        readonly phase: 'play' | 'restore' | 'mid-playback';
+        readonly willAutoSkip: boolean;
+    };
 }
 
 /**
@@ -904,8 +992,9 @@ export interface FoliumEvents {
 // ---------------------------------------------------------------- Services
 
 /**
- * `folium.playback`. `getState` is always available; every other method needs the `playback.control`
- * permission. All of it is unavailable in the export window.
+ * `folium.playback`. The readers (`getState`, and from Folium 1.5 `getVolume`, `getLoopMode` and `getQueue`)
+ * need no permission; every other method needs the `playback.control` permission. All of it is unavailable
+ * in the export window.
  */
 export interface FoliumPlaybackService {
     /**
@@ -957,6 +1046,42 @@ export interface FoliumPlaybackService {
      * Needs `playback.control`.
      */
     toggleLike(): boolean;
+    /** Folium 1.5: output volume (0–1) and the mute switch, which is separate from it. */
+    getVolume(): { volume: number; muted: boolean };
+    /**
+     * Folium 1.5: sets the volume, clamped to 0–1, the way the host's volume slider does; `muted` stays as
+     * it is. Every call is saved, so set the value you settled on rather than animating through it.
+     * Needs `playback.control`.
+     */
+    setVolume(volume: number): void;
+    /**
+     * Folium 1.5: mutes or unmutes. A set rather than a toggle, so two windows acting at once cannot cancel
+     * each other out. Needs `playback.control`.
+     */
+    setMuted(muted: boolean): void;
+    /** Folium 1.5: the repeat mode. */
+    getLoopMode(): FoliumLoopMode;
+    /**
+     * Folium 1.5: sets the repeat mode; the host reports the change like its own repeat button does.
+     * Setting the mode already in effect does nothing. Needs `playback.control`.
+     */
+    setLoopMode(mode: FoliumLoopMode): void;
+    /**
+     * Folium 1.5: a page of the play queue. `limit` defaults to 500, the most one call returns; without
+     * `offset` the page is centred on the displayed song. Song refs come from a pool of 2,000 shared with
+     * every other song DTO, the least recently handed out dropped first: every ref of the page you just read
+     * resolves, so read the pages you show rather than the whole queue.
+     */
+    getQueue(options?: { offset?: number; limit?: number }): FoliumQueueSnapshot;
+    /**
+     * Folium 1.5: plays queue entry `index`, with the same playback and navigation as clicking it in the
+     * host's queue panel; if it fails to play, the retry and skip buttons follow the queue as it is when
+     * pressed. In Personal FM, where the panel lists no queue, it plays the entry and FM stays on. With
+     * `expectedRef`, resolves false without acting when that position no longer holds that song (the queue
+     * changed between your calls). False for an index out of range and during external Stage playback.
+     * Needs `playback.control`.
+     */
+    playQueueItem(index: number, expectedRef?: string): Promise<boolean>;
 }
 
 /** A local file the user picked for this mod. */
@@ -990,6 +1115,8 @@ export interface FoliumUiService {
     toast(message: string, options?: { type?: 'info' | 'success' | 'error'; durationMs?: number }): void;
     /** Opens the player panel, optionally on one of this mod's panel tabs (local id). */
     openPlayerPanel(tabId?: string): void;
+    /** Folium 1.5: opens this mod's registered home tab (local id). Rejects unknown tabs. */
+    openHomeTab(tabId: string): void;
     /** Switches to the home or player view. */
     navigate(view: 'home' | 'player'): void;
     /** Folium 1.3: opens the host volume panel (the command palette's volume command). */
@@ -1055,6 +1182,84 @@ export interface FoliumNetService {
 }
 
 // ---------------------------------------------------------------- Experimental
+
+/** EXPERIMENTAL (`player.layout`): a rectangle in viewport CSS pixels. */
+export interface FoliumLayoutRect {
+    /** Left edge. */
+    readonly left: number;
+    /** Top edge. */
+    readonly top: number;
+    /** Width. */
+    readonly width: number;
+    /** Height. */
+    readonly height: number;
+}
+
+/** EXPERIMENTAL (`player.layout`): a native control or its interactive reveal region; no internal ids. */
+export interface FoliumPlayerObstacle {
+    /** Coarse purpose; future hosts may add roles. */
+    readonly role: 'navigation' | 'window' | 'playback' | 'now-playing' | 'panel' | 'notification' | (string & {});
+    /** Hidden controls still reserve the pointer region that reveals them. */
+    readonly kind: 'control' | 'reveal-area';
+    /** Occupied rectangle. */
+    readonly rect: FoliumLayoutRect;
+}
+
+/** EXPERIMENTAL (`player.layout`): immutable snapshot; identity is stable until geometry changes. */
+export interface FoliumPlayerLayout {
+    /** Live-player bounds in viewport CSS pixels. */
+    readonly bounds: FoliumLayoutRect;
+    /** Four safe edge distances in CSS pixels, relative to bounds. */
+    readonly insets: Readonly<{ top: number; right: number; bottom: number; left: number }>;
+    /** Regions to avoid; not guaranteed complete. Count, order and roles are not compatibility promises; native ids stay private. */
+    readonly obstacles: readonly FoliumPlayerObstacle[];
+}
+
+/** EXPERIMENTAL (`remote.actions`). Append-only buttons; native remote controls stay unchanged. */
+export interface FoliumRemoteActionDef {
+    /** Local action id; the host adds the owning mod and registration prefix. */
+    id: string;
+    /** Localized button label and accessible name. */
+    label: FoliumLabel;
+    /** Lucide icon name in kebab-case. */
+    icon: string;
+    /** Prevents invocation while true. */
+    disabled?: boolean;
+    /** Toggle state exposed through aria-pressed. */
+    pressed?: boolean;
+    /** Optional nonnegative finite count. */
+    count?: number;
+    /** Host-defined visual emphasis. */
+    tone?: 'normal' | 'alert';
+    /** `track` (default) expires when the displayed song changes; `session` survives a song change. */
+    scope?: 'track' | 'session';
+    /** Runs in the main window through the host's remote bridge. */
+    run(): void | Promise<void>;
+}
+
+/** EXPERIMENTAL (`remote.actions`). Current playback context for additional buttons. */
+export interface FoliumRemoteActionsContext {
+    /** Currently displayed song, or null when no song is displayed. */
+    readonly song: FoliumSong | null;
+    /** Playback state of the displayed song. */
+    readonly state: FoliumPlaybackState;
+}
+
+/** EXPERIMENTAL (`remote.actions`). A group of buttons appended after native remote controls. */
+export interface FoliumRemoteActionsDef {
+    /** Local registration id; the host adds the owning mod prefix. */
+    id: string;
+    /** Order among mod groups only; native buttons cannot be reordered. */
+    order?: number;
+    /** Buttons for the current context. The per-mod limit is not yet finalized. */
+    actions(context: FoliumRemoteActionsContext): readonly FoliumRemoteActionDef[];
+}
+
+/** EXPERIMENTAL (`remote.actions`). Owns one additional remote-button registration. */
+export interface FoliumRemoteActionsHandle extends FoliumRegistryHandle {
+    /** Re-evaluates actions and refreshes the remote window without changing native buttons. */
+    invalidate(): void;
+}
 
 /** EXPERIMENTAL (`omni.providers`): a song as a mod provider describes it. */
 export interface FoliumProviderSong {
@@ -1134,7 +1339,7 @@ export interface FoliumWordColorRange {
 export interface FoliumLyricsHelpers {
     /** When the host stops showing the line: `renderHints.renderEndTime`. -Infinity for null. */
     getLineRenderEndTime(line: FoliumLine | null | undefined): number;
-    /** The user's saved split when valid, otherwise Intl.Segmenter word segmentation. */
+    /** The user's saved split when valid, otherwise Folia's default word segmentation (icu-folia: Intl.Segmenter with jieba for Chinese and BudouX for Japanese; plain Intl.Segmenter until it has loaded). */
     segmentWords(line: Pick<FoliumLine, 'fullText' | 'wordSegments'>): FoliumWordSegment[];
     /** With no active line (index -1): the last line already over, for subtitles in gaps. */
     getRecentCompletedLine(lines: readonly FoliumLine[], lineIndex: number, time: number): FoliumLine | null;
@@ -1258,4 +1463,29 @@ export interface FoliumClientApi {
 export interface FoliumClientModule {
     /** `activate(folium)`; may return a disposer, which runs before the host removes the mod's registrations. */
     default: (folium: FoliumClientApi) => void | FoliumDisposer | Promise<void | FoliumDisposer>;
+}
+
+// ---------------------------------------------------------------- Main entry
+// Shapes of objects on the main (Node) entry's `activate(api)` parameter. That
+// `api` is plain JS (electron/modSystem/modApi.cjs) and its member table is
+// written by hand in dev/folium/api-docs.mjs; types here are listed under the
+// main entry heading of the reference, never under the client entry.
+
+/**
+ * Folium 1.5, main entries only: `api.storage.paths`, the directories this mod writes its files to. Needs
+ * the `filesystem.data` permission; without it, reading either path throws `permission-denied:filesystem.data`.
+ * Each read creates the directory when it is missing, and throws the file system's error when it cannot (a file
+ * or a dead link standing where the directory should be; for `cache`, clearing the cache in the mods panel
+ * removes that entry). Both getters are non-enumerable, so serializing or spreading `api` never reads them.
+ * Clients get no paths: they have no file system.
+ */
+export interface FoliumModPaths {
+    /** Files to keep: `<userData>/mods-data/<id>/files`, beside (not holding) the `folium.storage` data file. */
+    readonly data: string;
+    /**
+     * Files the mod can rebuild: `<userData>/mods-cache/<id>`. The user can empty it from the mods panel at
+     * any time, even while the mod runs, so expect files to vanish; the host sets no size limit, so cap it
+     * yourself.
+     */
+    readonly cache: string;
 }

@@ -76,6 +76,28 @@ describe('QR login failure help presentation', () => {
         }
     });
 
+    it('replaces the GitHub report with a note on unofficial builds and broken web deployments', () => {
+        expect(translateLoginSession(t, session('qq', 'check-error')).reportElsewhereNote).toBeNull();
+        expect(translateLoginSession(t, session('qq', 'check-error'), 'qq', { build: 'self-hosted', web: true }).reportElsewhereNote).toBeNull();
+        const unofficial = translateLoginSession(t, session('qq', 'check-error'), 'qq', { build: 'unofficial', web: false });
+        expect(unofficial.reportElsewhereNote).toBe('home.qrReportUnofficialBuild');
+        // 不再说「发给我们」：提示语换成该找谁，展开项也换成中性的文字。
+        expect(unofficial.diagnosticsPrompt).toBe('home.qrReportUnofficialBuild');
+        expect(unofficial.failureTips?.escalation).toBe('home.qrDiagnosticsToggleElsewhere');
+        expect(translateLoginSession(t, session('netease', 'start-error'), 'netease', { build: 'self-hosted', web: true }).reportElsewhereNote)
+            .toBe('home.qrReportWebDeployment');
+        // 桌面版内嵌后端起不来也是 start-error，但那不是部署问题：照常去本仓库反馈（组件用例的探针按网页版跑，覆盖不到这条）。
+        const desktop = translateLoginSession(t, session('netease', 'start-error'), 'netease', { build: 'official', web: false });
+        expect(desktop.reportElsewhereNote).toBeNull();
+        expect(desktop.failureTips?.escalation).toBe('home.qrDiagnosticsToggle');
+        const failureHelp = buildQrLoginFailureHelpProps({
+            t, providerId: 'qq', failure: 'check-error', tips: { title: '', items: [], escalation: '' },
+            reportElsewhereNote: 'home.qrReportUnofficialBuild', buildReport: async () => 'report',
+        });
+        expect(failureHelp.reportElsewhereNote).toBe('home.qrReportUnofficialBuild');
+        expect(failureHelp.prompt).toBe('home.qrReportUnofficialBuild');
+    });
+
     it('stays a narrow single column while nothing has failed', () => {
         const { view, failureHelp, html } = render('netease', null);
         expect(view.failureTips).toBeNull();

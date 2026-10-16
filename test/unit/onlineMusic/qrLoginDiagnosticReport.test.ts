@@ -111,6 +111,28 @@ describe('login backend diagnostics', () => {
         ]));
     });
 
+    it('still produces a report when the NetEase upstream package never loaded', () => {
+        const error = "ENOENT: no such file or directory, open 'D:\\Folia\\%USERPROFILE%\\AppData\\Local\\Temp\\anonymous_token'";
+        const lines = formatLoginBackendDiagnostics({
+            ...neteaseSnapshot,
+            backend: { status: 'error', port: null, error: `load: ${error}`, updatedAt: AT },
+            startup: [{
+                startedAt: AT,
+                finishedAt: AT,
+                outcome: 'failed',
+                steps: [{ id: 'load', startedAt: AT, durationMs: 0, outcome: 'failed', detail: {}, error }],
+            }],
+            login: null,
+            identity: null,
+        }, []);
+
+        expect(lines).toEqual(expect.arrayContaining([
+            `backend: error error=${JSON.stringify(`load: ${error}`)} (since 12:00:00.000)`,
+            `    load failed 0ms error=${JSON.stringify(error)}`,
+            'upstream package: not loaded (see the load step above)',
+        ]));
+    });
+
     it('lists each address Happy Eyeballs tried when the first one failed', () => {
         expect(formatConnection({
             ...resetConnection,
@@ -199,6 +221,27 @@ describe('QR login diagnostic report', () => {
             'netease details:',
             '  runtime: electron (embedded API)',
             '```',
+        ]);
+    });
+
+    it('says which build produced the report and, on the web, which site it ran on', () => {
+        const report = formatQrLoginDiagnosticReport({
+            generatedAt: AT,
+            appVersion: '1.2.3',
+            userAgent: 'test-agent',
+            build: 'unofficial (someone/folia-fork@abc1234)',
+            origin: 'https://folia.example.com',
+            providerId: 'netease',
+            methodId: null,
+            failure: 'start-error',
+            timeline: [],
+            providerLines: [],
+        });
+
+        expect(report.split('\n').slice(4, 7)).toEqual([
+            'app: 1.2.3',
+            'build: unofficial (someone/folia-fork@abc1234)',
+            'origin: https://folia.example.com',
         ]);
     });
 

@@ -48,7 +48,9 @@ import { createCoverUrlResolver } from './components/app/playback/createCoverUrl
 import { createLyricsSetter } from './components/app/playback/createLyricsSetter';
 import { createLyricSegmentationActions } from './components/app/playback/createLyricSegmentationActions';
 import { useLyricWordSegmentation } from './hooks/useLyricWordSegmentation';
+import { useIcuFoliaSegmentation } from './hooks/useIcuFoliaSegmentation';
 import { createOnlineRecoveryController } from './components/app/playback/createOnlineRecoveryController';
+import { handleOnlineMediaFailure } from './components/app/playback/handleOnlineMediaFailure';
 import { persistPlaybackCache } from './components/app/playback/persistPlaybackCache';
 import { useAppOverlaysModel } from './components/app/overlays/useAppOverlaysModel';
 import { resolveNextUpTrack } from './components/app/overlays/now-playing-toast/resolveNextUpTrack';
@@ -76,7 +78,7 @@ import { useQqLibrary } from './hooks/useQqLibrary';
 import { useBodianLibrary } from './hooks/useBodianLibrary';
 import { useLibraryAccountController } from './library/app/useLibraryAccountController';
 import { createLibraryAccountSwitchCleanupPort } from './library/app/createLibraryAccountPort';
-import { useLibraryStageToolsPort } from './library/app/useLibraryStageToolsPort';
+import { useAppWallToolsHost } from './components/app/wall-tools/useAppWallToolsHost';
 import { useLibraryAccountProviders } from './library/core/bindings/useLibraryAccount';
 import { resolveActiveProviderSummary } from './library/core/model/accountRules';
 import { useAppPreferences } from './hooks/useAppPreferences';
@@ -352,6 +354,7 @@ export default function App() {
         animationFrameRef,
         shouldAutoPlay,
         currentSongRef,
+        playbackGenerationRef,
         currentSongFullRef,
         playbackAutoSkipCountRef,
         volumePreviewFrameRef,
@@ -593,6 +596,7 @@ export default function App() {
         audioSrc,
         audioRef,
         currentSongRef,
+        playbackGenerationRef,
         blobUrlRef,
         shouldAutoPlayRef: shouldAutoPlay,
         pendingResumeTimeRef,
@@ -603,7 +607,7 @@ export default function App() {
         playQueue,
         onlineAudioUrlTtlMs: ONLINE_AUDIO_URL_TTL_MS,
         onlineAudioUrlRefreshBufferMs: ONLINE_AUDIO_URL_REFRESH_BUFFER_MS,
-    }), [audioQuality, audioSrc, audioRef, blobUrlRef, currentOnlineAudioUrlFetchedAtRef, currentSong, currentSongRef, lastAudioRecoverySourceRef, onlinePlaybackRecoveryRef, pendingResumeTimeRef, persistLastPlaybackCache, playQueue, setAudioSrc, setCurrentSong, setPlayQueue, shouldAutoPlay]);
+    }), [audioQuality, audioSrc, audioRef, blobUrlRef, currentOnlineAudioUrlFetchedAtRef, currentSong, currentSongRef, lastAudioRecoverySourceRef, onlinePlaybackRecoveryRef, pendingResumeTimeRef, persistLastPlaybackCache, playQueue, playbackGenerationRef, setAudioSrc, setCurrentSong, setPlayQueue, shouldAutoPlay]);
 
     const getCoverUrl = useMemo(
         () => createCoverUrlResolver(cachedCoverUrl, currentSong),
@@ -867,6 +871,7 @@ export default function App() {
         isElectronWindow,
         audioRef,
         currentSongRef,
+        playbackGenerationRef,
         shouldAutoPlayRef: shouldAutoPlay,
         pendingResumeTimeRef,
         lastAudioRecoverySourceRef,
@@ -899,6 +904,8 @@ export default function App() {
         setIsLyricsLoading,
         blobUrlRef,
         shouldAutoPlayRef: shouldAutoPlay,
+        currentSongRef,
+        playbackGenerationRef,
         pendingResumeTimeRef,
         lastAudioRecoverySourceRef,
         currentOnlineAudioUrlFetchedAtRef,
@@ -979,6 +986,8 @@ export default function App() {
         loadLocalPlaylists,
         canRestoreSession: windowPlaybackHandoffRestoreStatus === 'none',
         shouldAutoPlayRef: shouldAutoPlay,
+        currentSongRef,
+        playbackGenerationRef,
     });
 
     const localLibraryCatalog = useLocalLibraryCatalog(localSongs);
@@ -1008,13 +1017,15 @@ export default function App() {
         setLyricsStable,
     ]);
 
-    const { addNavidromeSongsToQueue, applyQueueBatchOperation, removeQueueSong, moveQueueSongToEnd, moveQueueSongToNext } = useMemo(() => createQueueMutations({
+    const { addNavidromeSongsToQueue, applyQueueBatchOperation, removeQueueSong, moveQueueSongToEnd, moveQueueSongToNext, moveQueueSong } = useMemo(() => createQueueMutations({
         currentSong,
         playQueue,
         persistLastPlaybackCache,
         t,
         queueAddBehavior,
-    }), [currentSong, playQueue, persistLastPlaybackCache, t, queueAddBehavior]);
+        audioQuality,
+        userId: user?.id,
+    }), [currentSong, playQueue, persistLastPlaybackCache, t, queueAddBehavior, audioQuality, user?.id]);
 
     // --- Effects ---
 
@@ -1072,6 +1083,7 @@ export default function App() {
         blobUrlRef,
         shouldAutoPlayRef: shouldAutoPlay,
         currentSongRef,
+        playbackGenerationRef,
         mainPlaybackSnapshotRef,
         playbackAutoSkipCountRef,
         pendingResumeTimeRef,
@@ -1924,6 +1936,8 @@ export default function App() {
     });
     // Loads the playing song's saved word segmentation into the store the lyric setter reads.
     useLyricWordSegmentation();
+    // Loads icu-folia, the default word segmenter, once a word-based mode shows Chinese or Japanese.
+    useIcuFoliaSegmentation(visualizerMode);
     /**
      * Cancels a blend back onto the track the listener is hearing, or null when there is none.
      *
@@ -2002,6 +2016,7 @@ export default function App() {
         // does not run playSong. Left stale, every callback gated on "is this still the current song"
         // (recovery, scrobble, the deck-playing handler) would answer for a track that isn't playing.
         currentSongRef.current = getPlaybackSongKey(exitingSong);
+        playbackGenerationRef.current += 1;
         // One line per cancel, because everything this path does is invisible by design - it is the
         // absence of a song change. Without it a report of "I pressed something and it went wrong"
         // has nothing in the log to sit next to, which is exactly how the wrong-duration bug above
@@ -2109,6 +2124,7 @@ export default function App() {
         next: () => { void handleNextTrack(); },
         previous: handlePrevTrack,
         playSong: (song) => playSong(song),
+        playQueueSong: (song, queue, isFm) => playSong(song, queue, isFm),
         enqueue: addOnlineSongToQueue,
         navigateToPlayer,
         navigateToHome,
@@ -2170,16 +2186,24 @@ export default function App() {
         setStatusMsg({ type: 'error', text: t('search.catalogUnavailable') });
     }, [navigateToCollection, setStatusMsg, t]);
 
-    // 资料库墙右下角工具面板的宿主动作（生成主题、队列洗牌、音量预览）：命令面板的同一套命令，端口身份稳定。
-    const stageTools = useLibraryStageToolsPort({
+    // 两面墙（bravais 与 Lattice）右下角工具面板的宿主动作：命令面板的同一套命令与队列操作，host 身份稳定。
+    const wallToolsHost = useAppWallToolsHost({
         invokeCommandById: commandPalette.invokeCommandById,
         canInvokeCommandById: commandPalette.canInvokeCommandById,
         isGeneratingTheme,
         previewVolume: handlePreviewVolume,
+        navigateToPlayer,
+        playQueue,
+        playSong,
+        moveQueueSongToNext,
+        moveQueueSongToEnd,
+        removeQueueSong,
+        moveQueueSong,
+        clearQueue,
+        saveCurrentQueueAsLocalPlaylist,
     });
     const homeModel = useHomeModel({
         account: accountController,
-        stageTools,
         activeProvider,
         playSong,
         navigateToPlayer,
@@ -2689,28 +2713,14 @@ export default function App() {
                     return;
                 }
 
-                const failedSrc = e.currentTarget.currentSrc || audioSrc;
-                const shouldRetryOnlineSong = Boolean(
-                    currentSong &&
-                    !isLocalPlaybackSong(currentSong) &&
-                    !isNavidromePlaybackSong(currentSong) &&
-                    !isStagePlaybackSong(currentSong) &&
-                    failedSrc &&
-                    !failedSrc.startsWith('blob:')
-                );
-
-                if (shouldRetryOnlineSong) {
-                    void (async () => {
-                        const recovered = await recoverOnlinePlaybackSource({
-                            failedSrc,
-                            resumeAt: e.currentTarget.currentTime,
-                            autoplay: (!e.currentTarget.paused && !e.currentTarget.ended) || playerState === PlayerState.PLAYING || shouldAutoPlay.current,
-                        });
-
-                        if (!recovered) {
-                            skipAfterPlaybackFailure();
-                        }
-                    })();
+                const failedSrc = audioElement.currentSrc || audioSrc;
+                // Online sources (cached blobs included) refresh once and report a structured reason.
+                if (currentSong && failedSrc && !isLocalPlaybackSong(currentSong) && !isNavidromePlaybackSong(currentSong) && !isStagePlaybackSong(currentSong)) {
+                    void handleOnlineMediaFailure({
+                        audioElement, failedSrc, song: currentSong, recoverOnlinePlaybackSource, skipAfterPlaybackFailure,
+                        playbackGeneration: playbackGenerationRef.current,
+                        autoplay: (!audioElement.paused && !audioElement.ended) || playerState === PlayerState.PLAYING || shouldAutoPlay.current,
+                    });
                     return;
                 }
 
@@ -2749,7 +2759,7 @@ export default function App() {
         >
 
             {/* 首页层、Lattice 与两面墙共用的右下角工具按钮（WallToolsDock：交接时按钮节点不重建）。 */}
-            <WallToolsDockHost>
+            <WallToolsDockHost host={wallToolsHost}>
             {/* Home Mount Point */}
             <div
                 className="absolute inset-0 z-10"
@@ -2818,6 +2828,7 @@ export default function App() {
                                 queue={playQueue}
                                 isDaylight={isDaylight}
                                 onBack={navigateBackFromLattice}
+                                onGoHome={navigateToHome}
                                 onOpenPlayer={navigateToPlayer}
                                 onPlaySong={(song, queue) => {
                                     void playSong(song, queue, false, { shouldNavigateToPlayer: false });

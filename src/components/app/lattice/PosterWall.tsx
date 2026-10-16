@@ -14,6 +14,7 @@ import { useWallCameraPan, type LatticeCamera } from '../../wall/useWallCameraPa
 import { useLatticePosterSelection } from './useLatticePosterSelection';
 import { useWallKeyboardFocus } from './useWallKeyboardFocus';
 import { useWallPointerPan } from '../../wall/useWallPointerPan';
+import { formatWorldTransform } from '../../wall/wallView';
 import type { LatticeTile } from './latticeModel';
 import LatticePoster from './LatticePoster';
 import { countRender } from '../../../dev/renderCount';

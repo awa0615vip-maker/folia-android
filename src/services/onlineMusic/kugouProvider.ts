@@ -10,8 +10,8 @@ import {
     type ProviderCollection,
     type ProviderHistoryEntry,
     type ProviderPage,
+    type ProviderPlaybackAttempt,
     type ProviderUser,
-    type QrLoginState,
 } from '../../types/onlineMusic';
 import { getSizedCoverUrl } from '../../utils/coverUrl';
 import { parseLyricsByFormat } from '../../utils/lyrics/parserCore';
@@ -25,7 +25,7 @@ import {
     normalizeSongTitleForLyricSearch,
 } from '../../utils/lyrics/searchQuery';
 import { removeProviderSessionValue, readProviderSessionValue } from './providerStorage';
-import { noteLibraryStep } from '../../nativeBridge/api/libraryTrace.js';
+import { attemptChainDecision, attemptFromError, emptyAttempt, summarizePlaybackAttempts } from './playbackAttempts';
 import {
     getKugouTransportAvailability,
     hasKugouAuthenticatedSearchSession,
@@ -35,9 +35,6 @@ import {
 } from './kugouTransport';
 
 // src/services/onlineMusic/kugouProvider.ts
-
-/** 一次取链的总预算：超过就认输并报错，别把播放器无限期挂在加载态。 */
-const KUGOU_PLAY_TOTAL_BUDGET_MS = 25000;
 
 const valueOf = (raw: any, ...keys: string[]) => {
     for (const key of keys) {
@@ -450,24 +447,6 @@ export const resolveKugouSongCatalogRefs = async (song: UnifiedSong): Promise<Un
             ...(albumRef ? { catalogRef: albumRef } : {}),
         },
     };
-};
-
-/**
- * Ring buffer behind the QR login diagnostics report.
- *
- * The failure mode that matters here is "the phone confirmed but the app still sees no session",
- * so the account-id hint and the login-status outcome are the lines worth keeping. Without them a
- * failed Kugou scan reports `kugou details: (none)` and there is nothing to read.
- */
-const KUGOU_QR_TRACE_LIMIT = 24;
-const kugouQrTrace: Array<{ at: number; line: string }> = [];
-// Only state *changes* land in the trace; the QR endpoint is polled every couple of seconds.
-let lastKugouQrState: QrLoginState['state'] | '' = '';
-const noteKugouQrTrace = (line: string): void => {
-    kugouQrTrace.push({ at: Date.now(), line });
-    if (kugouQrTrace.length > KUGOU_QR_TRACE_LIMIT) {
-        kugouQrTrace.splice(0, kugouQrTrace.length - KUGOU_QR_TRACE_LIMIT);
-    }
 };
 
 const normalizeUser = (raw: any): ProviderUser => {
@@ -941,17 +920,8 @@ const getKugouPlaylistTrackSongs = async (
         );
     }
 
-    const clientOrderSongs = songs.length > 1 ? songs.slice().reverse() : songs;
-    if (songs.length > 1) {
-        noteLibraryStep('kugou', 'playlist:client-order', {
-            collection: globalCollectionId,
-            tracks: songs.length,
-            transform: 'reversed',
-            source: 'liked-or-mutation',
-        });
-    }
-    kugouLikedTrackCache.set(globalCollectionId, { fetchedAt: Date.now(), songs: clientOrderSongs });
-    return clientOrderSongs;
+    kugouLikedTrackCache.set(globalCollectionId, { fetchedAt: Date.now(), songs });
+    return songs;
 };
 
 const removeKugouPlaylistTrackCacheEntry = (globalCollectionId: string, hash: string): void => {
@@ -1051,15 +1021,16 @@ export const kugouProvider: OnlineMusicProvider = {
             const qualities = sourceRef?.variant === 'cloud' ? [quality] : qualityFallbacks(quality);
             const albumId = String(sourceRef?.providerData?.albumId || '');
             const albumAudioId = String(sourceRef?.providerData?.albumAudioId || '');
-            // 每档音质最多两种请求变体，桥侧单次请求最坏也要十几秒：不加总预算的话，一首取不到
-            // 地址的歌能把播放器转上好几分钟，用户只会觉得「卡住」而不是「失败」。到点就认输，
-            // 让界面尽快报错，诊断报告也能记录到完整的一次尝试。
-            const playStartedAt = Date.now();
-            const playBudgetLeft = () => KUGOU_PLAY_TOTAL_BUDGET_MS - (Date.now() - playStartedAt);
+            // Diagnostic evidence for every failed request; when nothing plays, summarizePlaybackAttempts turns it into
+            // one evidence-based error instead of returning null.
+            const attempts: ProviderPlaybackAttempt[] = [];
+            let lastError: unknown;
+            // An auth failure or timeout stops the remaining /song/url qualities and variants; legacy still runs once.
+            let songUrlChainStopped = false;
 
             // Tries the preferred KuGou quality first and degrades until a playable URL is returned.
             for (const candidateQuality of qualities) {
-                if (playBudgetLeft() <= 0) break;
+                if (songUrlChainStopped) break;
                 const requestVariants = sourceRef?.variant === 'cloud'
                     ? [{ name: 'cloud', operation: 'user_cloud_url' as const, params: {
                         hash, id: String(sourceRef.providerData?.fileId || ''),
@@ -1081,13 +1052,7 @@ export const kugouProvider: OnlineMusicProvider = {
 
                 // Search metadata can contain album IDs that do not belong to the returned hash, so retry the same quality by hash alone first.
                 for (const requestVariant of requestVariants) {
-                    if (playBudgetLeft() <= 0) break;
                     try {
-                        const requestStartedAt = Date.now();
-                        noteLibraryStep('kugou', 'play:request', {
-                            quality: candidateQuality,
-                            variant: requestVariant.name,
-                        });
                         const response = await requestKugou(requestVariant.operation, requestVariant.params);
                         const data = dataOf(response);
                         const payload = Array.isArray(data) ? data[0] : data;
@@ -1110,11 +1075,6 @@ export const kugouProvider: OnlineMusicProvider = {
                                 resolvedQuality: candidateQuality,
                                 requestVariant: requestVariant.name,
                             });
-                            noteLibraryStep('kugou', 'play:ok', {
-                                ms: Date.now() - requestStartedAt,
-                                variant: requestVariant.name,
-                                quality: candidateQuality,
-                            });
                             return {
                                 // Preserve the upstream candidate here; the shared playback transport normalizes its scheme.
                                 url,
@@ -1123,22 +1083,24 @@ export const kugouProvider: OnlineMusicProvider = {
                                 ...(replayGain ? { replayGain } : {}),
                             };
                         }
+                        const status = valueOf(data, 'status') ?? valueOf(response, 'status');
+                        const errorCode = valueOf(data, 'errcode', 'error_code') ?? valueOf(response, 'errcode', 'error_code');
                         console.warn('[KuGouProvider] playback:no-url', {
                             hash,
                             requestedQuality: quality,
                             candidateQuality,
                             requestVariant: requestVariant.name,
-                            status: valueOf(data, 'status') ?? valueOf(response, 'status'),
-                            errorCode: valueOf(data, 'errcode', 'error_code') ?? valueOf(response, 'errcode', 'error_code'),
+                            status,
+                            errorCode,
                         });
-                        noteLibraryStep('kugou', 'play:no-url', {
-                            ms: Date.now() - requestStartedAt,
-                            variant: requestVariant.name,
+                        // An answer without a URL (status 3, fail_process, ...) proves no reason: record it as an empty
+                        // attempt and never infer a takedown or a membership requirement from it.
+                        attempts.push(emptyAttempt(requestVariant.operation, {
                             quality: candidateQuality,
-                            status: valueOf(data, 'status') ?? valueOf(response, 'status'),
-                            errorCode: valueOf(data, 'errcode', 'error_code') ?? valueOf(response, 'errcode', 'error_code'),
-                            reason: valueOf(payload, 'reason', 'error', 'message'),
-                        });
+                            variant: requestVariant.name,
+                            upstreamCode: errorCode,
+                            detail: status === undefined ? undefined : `status=${status}`,
+                        }));
                     } catch (error) {
                         console.warn('[KuGouProvider] playback:quality-failed', {
                             hash,
@@ -1147,11 +1109,18 @@ export const kugouProvider: OnlineMusicProvider = {
                             requestVariant: requestVariant.name,
                             error: error instanceof Error ? error.message : String(error),
                         });
-                        noteLibraryStep('kugou', 'play:error', {
-                            variant: requestVariant.name,
+                        lastError = error;
+                        const attempt = attemptFromError(requestVariant.operation, error, {
                             quality: candidateQuality,
-                            error: error instanceof Error ? error.message : String(error),
+                            variant: requestVariant.name,
                         });
+                        attempts.push(attempt);
+                        const decision = attemptChainDecision(attempt);
+                        if (decision === 'stop-all') throw summarizePlaybackAttempts('kugou', attempts, { lastError });
+                        if (decision === 'stop-chain') {
+                            songUrlChainStopped = true;
+                            break;
+                        }
                     }
                 }
             }
@@ -1159,7 +1128,7 @@ export const kugouProvider: OnlineMusicProvider = {
             // KuGou's current /song/url can mark certain hashes as unavailable (status: 3)
             // even though the same hash is still playable through the old mobile endpoint.
             // Only use this as a last resort after every quality and hash variant above has failed.
-            if (sourceRef?.variant !== 'cloud' && playBudgetLeft() > 0) {
+            if (sourceRef?.variant !== 'cloud') {
                 try {
                     const legacyResponse = await requestKugouLegacyPlayInfo(hash);
                     const legacyUrl = audioUrlOf(valueOf(legacyResponse, 'url') ?? valueOf(dataOf(legacyResponse), 'url'))
@@ -1175,29 +1144,33 @@ export const kugouProvider: OnlineMusicProvider = {
                             quality: 'standard',
                         };
                     }
+                    const legacyStatus = valueOf(legacyResponse, 'status') ?? valueOf(dataOf(legacyResponse), 'status');
                     console.warn('[KuGouProvider] playback:no-url-legacy', {
                         hash,
                         requestedQuality: quality,
-                        status: valueOf(legacyResponse, 'status') ?? valueOf(dataOf(legacyResponse), 'status'),
+                        status: legacyStatus,
                     });
+                    attempts.push(emptyAttempt('legacy_play_info', {
+                        detail: legacyStatus === undefined ? undefined : `status=${legacyStatus}`,
+                    }));
                 } catch (error) {
                     console.warn('[KuGouProvider] playback:legacy-failed', {
                         hash,
                         requestedQuality: quality,
                         error: error instanceof Error ? error.message : String(error),
                     });
+                    lastError = error;
+                    attempts.push(attemptFromError('legacy_play_info', error));
                 }
             }
 
             console.warn('[KuGouProvider] playback:unavailable', { hash, requestedQuality: quality, attemptedQualities: qualities });
-            noteLibraryStep('kugou', 'play:exhausted', {
-                hash: hash.slice(0, 8),
-                requestedQuality: quality,
-                attempted: qualities.join('/'),
-                ms: Date.now() - playStartedAt,
-                budgetMs: KUGOU_PLAY_TOTAL_BUDGET_MS,
+            // Without a session and with empty answers, signing in only *may* help (the docs say no more), so this is
+            // a hint, never auth-required.
+            throw summarizePlaybackAttempts('kugou', attempts, {
+                lastError,
+                signInMayHelp: !hasKugouAuthenticatedSearchSession() && attempts.some(attempt => attempt.outcome === 'empty'),
             });
-            return null;
         },
     },
     lyrics: {
@@ -1212,13 +1185,7 @@ export const kugouProvider: OnlineMusicProvider = {
                 transport: hasElectronTransport ? 'electron' : 'web',
                 hasWebUserId: Boolean(userId),
             });
-            noteKugouQrTrace(`login-status start transport=${hasElectronTransport ? 'electron' : 'web'} hasAccountIdHint=${Boolean(userId)}`);
-            if (!userId && !hasElectronTransport) {
-                // The bridge holds the cookies, but user_detail still needs the id to address the
-                // account, so a scan can be fully confirmed upstream and still land here.
-                noteKugouQrTrace('login-status → null (no account id hint to build user_detail)');
-                return null;
-            }
+            if (!userId && !hasElectronTransport) return null;
             try {
                 const response = await requestKugou('user_detail', { userid: userId || undefined });
                 let user = normalizeUser(response);
@@ -1245,17 +1212,12 @@ export const kugouProvider: OnlineMusicProvider = {
                     hasNickname: Boolean(user.nickname),
                     hasAvatar: Boolean(user.avatarUrl),
                 });
-                const resolved = user.id && user.nickname ? user : null;
-                noteKugouQrTrace(
-                    `login-status → ${resolved ? 'ok' : 'null'} userId=${user.id || '(none)'} hasNickname=${Boolean(user.nickname)}`,
-                );
-                return resolved;
+                return user.id && user.nickname ? user : null;
             } catch (error) {
                 console.warn('[KugouProvider] login-status:error', {
                     name: error instanceof Error ? error.name : 'Error',
                     message: error instanceof Error ? error.message : String(error),
                 });
-                noteKugouQrTrace(`login-status → error ${error instanceof Error ? error.message : String(error)}`);
                 throw error;
             }
         },
@@ -1266,14 +1228,9 @@ export const kugouProvider: OnlineMusicProvider = {
             lastSeenKugouUserId = null;
         },
         async getQrKey() {
-            // A fresh session begins here. Without the reset, the first state of the next scan would
-            // be swallowed as "unchanged" and the trace would start mid-story.
-            lastKugouQrState = '';
             const response = await requestKugou('login_qr_key');
             const data = dataOf(response);
-            const key = String(valueOf(data, 'qrcode', 'qrkey', 'key', 'ticket') || '');
-            noteKugouQrTrace(`qr:key ${key ? 'ok' : 'failed'}`);
-            return key;
+            return String(valueOf(data, 'qrcode', 'qrkey', 'key', 'ticket') || '');
         },
         async createQr(key) {
             const response = await requestKugou('login_qr_create', { key, qrimg: true });
@@ -1284,29 +1241,11 @@ export const kugouProvider: OnlineMusicProvider = {
             const response = await requestKugou('login_qr_check', { key, qrcode: key });
             const data = dataOf(response);
             const status = Number(valueOf(data, 'status', 'code') ?? valueOf(response, 'status', 'code'));
-            const state: QrLoginState['state'] = status === 0 ? 'expired'
-                : status === 1 ? 'waiting'
-                    : status === 2 || status === 3 ? 'scanned'
-                        : status === 4 || data?.token ? 'confirmed'
-                            : 'error';
-            if (state !== lastKugouQrState) {
-                lastKugouQrState = state;
-                const hasAccountId = Boolean(valueOf(data, 'userid', 'userId', 'user_id'));
-                noteKugouQrTrace(`qr:check status=${status} → ${state} hasAccountId=${hasAccountId}`);
-            }
-            if (state === 'error') {
-                return { state, message: String(valueOf(data, 'message', 'msg', 'error') || '') };
-            }
-            return { state };
-        },
-        /** Same shape as the QQ trace so the diagnostic report reads consistently across providers. */
-        async getQrLoginDiagnostics(): Promise<string[]> {
-            if (kugouQrTrace.length === 0) return [];
-            const base = kugouQrTrace[0].at;
-            return kugouQrTrace.map(({ at, line }) => {
-                const offset = String(at - base).padStart(5, ' ');
-                return `kg step +${offset}ms ${line}`;
-            });
+            if (status === 0) return { state: 'expired' };
+            if (status === 1) return { state: 'waiting' };
+            if (status === 2 || status === 3) return { state: 'scanned' };
+            if (status === 4 || data?.token) return { state: 'confirmed' };
+            return { state: 'error', message: String(valueOf(data, 'message', 'msg', 'error') || '') };
         },
     },
     library: {
@@ -1352,21 +1291,7 @@ export const kugouProvider: OnlineMusicProvider = {
 
             const requestLimit = Math.min(Math.max(1, limit), KUGOU_MAX_PAGE_SIZE);
             const response = await requestKugou('playlist_track_all', { id: String(id), pagesize: requestLimit, page: Math.floor(offset / requestLimit) + 1 });
-            const tracks = listOf(response).map(normalizeKugouSong);
-            // KuGou's playlist API returns the list in the opposite order from the official
-            // client for regular playlists. Keep the provider response intact long enough to
-            // record the transform, then expose the same top-to-bottom order the listener sees
-            // in the KuGou app.
-            if (tracks.length > 1) {
-                noteLibraryStep('kugou', 'playlist:client-order', {
-                    collection: String(id),
-                    tracks: tracks.length,
-                    transform: 'reversed',
-                    offset,
-                });
-                tracks.reverse();
-            }
-            return pageOf(tracks, response, requestLimit, offset);
+            return pageOf(listOf(response).map(normalizeKugouSong), response, requestLimit, offset);
         },
         async getCloudTracks(limit, offset) {
             const requestLimit = Math.min(Math.max(1, limit), KUGOU_MAX_PAGE_SIZE);

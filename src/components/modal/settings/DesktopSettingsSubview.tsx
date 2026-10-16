@@ -22,13 +22,17 @@ import AiConnectionTest from './AiConnectionTest';
 import SettingsRow, { SettingsToggle } from './SettingsRow';
 import { settingsDividerClassFor } from './settingsCardClasses';
 import { usePlayerChromeSettingsStore } from '../../../stores/usePlayerChromeSettingsStore';
+import { openAIEndpointOf } from '../../../utils/openAIEndpoint';
 
 // src/components/modal/settings/DesktopSettingsSubview.tsx
 // Desktop-only window, tray, update, and AI settings separated from the global settings modal.
 
 const AUR_PACKAGE_URL = 'https://aur.archlinux.org/packages/folia-major-bin';
 
+type AiApiKeyName = 'GEMINI_API_KEY' | 'OPENAI_API_KEY';
+
 type ElectronSettingsState = {
+    /** Draft of a replacement key; the saved key never reaches the renderer. */
     GEMINI_API_KEY: string;
     OPENAI_API_KEY: string;
     OPENAI_API_URL: string;
@@ -86,6 +90,10 @@ export type DesktopSettingsModel = {
     onOpenChinaDownload: () => Promise<void> | void;
     onUpdateChannelChange: (channel: 'realeco' | 'limo' | 'cielo') => Promise<void> | void;
     onSaveElectronSettings: () => Promise<void> | void;
+    onClearAiApiKey: (key: AiApiKeyName) => Promise<void> | void;
+    savedAiApiKeys: Record<AiApiKeyName, boolean>;
+    /** Endpoint the saved OpenAI-compatible key is bound to, or null when none is saved. */
+    savedOpenAIKeyEndpoint: string | null;
     onToggleAutoUpdate: () => Promise<void> | void;
     onToggleUpdateCheck: () => Promise<void> | void;
     setElectronSettings: React.Dispatch<React.SetStateAction<ElectronSettingsState>>;
@@ -148,6 +156,9 @@ const DesktopSettingsSubview: React.FC<DesktopSettingsSubviewProps> = ({
         onOpenChinaDownload,
         onUpdateChannelChange,
         onSaveElectronSettings,
+        onClearAiApiKey,
+        savedAiApiKeys,
+        savedOpenAIKeyEndpoint,
         onToggleAutoUpdate,
         onToggleUpdateCheck,
         setElectronSettings,
@@ -208,6 +219,47 @@ const DesktopSettingsSubview: React.FC<DesktopSettingsSubviewProps> = ({
             )}
         </label>
     );
+
+    // Password field for a provider key. A saved key is never shown: the field stays empty with a
+    // "saved" placeholder, typing replaces it on save, and Clear removes it right away.
+    const renderApiKeyField = (key: AiApiKeyName, label: React.ReactNode, placeholder: string) => {
+        const saved = savedAiApiKeys[key];
+        // The saved OpenAI-compatible key is only sent to the endpoint it was saved for; say so while
+        // the URL in the form points elsewhere and no replacement key has been typed.
+        const boundEndpoint = key === 'OPENAI_API_KEY'
+            && savedOpenAIKeyEndpoint
+            && !(electronSettings.OPENAI_API_KEY || '').trim()
+            && openAIEndpointOf(electronSettings.OPENAI_API_URL) !== savedOpenAIKeyEndpoint
+            ? savedOpenAIKeyEndpoint
+            : null;
+        return renderField(
+            label,
+            <div className="flex items-center gap-2">
+                <input
+                    type="password"
+                    autoComplete="off"
+                    value={electronSettings[key] || ''}
+                    onChange={(e) => setElectronSettings({ ...electronSettings, [key]: e.target.value })}
+                    placeholder={saved ? t('options.aiApiKeySavedPlaceholder') : placeholder}
+                    className={fieldClass}
+                    style={{ color: 'var(--text-primary)' }}
+                />
+                {saved && (
+                    <button
+                        type="button"
+                        onClick={() => void onClearAiApiKey(key)}
+                        className={`shrink-0 rounded-lg border px-3 py-2 text-xs transition-colors ${ghostButtonClass}`}
+                        style={{ color: 'var(--text-primary)' }}
+                    >
+                        {t('options.aiApiKeyClear')}
+                    </button>
+                )}
+            </div>,
+            boundEndpoint
+                ? t('options.aiApiKeyEndpointMismatchDesc', { endpoint: boundEndpoint })
+                : saved ? t('options.aiApiKeySavedDesc') : undefined,
+        );
+    };
 
     const renderProviderOption = (provider: 'gemini' | 'openai', label: React.ReactNode) => {
         const selected = provider === 'openai'
@@ -576,19 +628,14 @@ const DesktopSettingsSubview: React.FC<DesktopSettingsSubviewProps> = ({
                     <div className={`p-4 space-y-3 border-b ${rowDividerClass}`}>
                         {electronSettings.AI_PROVIDER !== 'openai' ? (
                             <>
-                            {renderField(
+                            {renderApiKeyField(
+                                'GEMINI_API_KEY',
                                 t('options.geminiApiKey') || 'Gemini API Key',
-                                <input
-                                    type="password"
-                                    value={electronSettings.GEMINI_API_KEY || ''}
-                                    onChange={(e) => setElectronSettings({ ...electronSettings, GEMINI_API_KEY: e.target.value })}
-                                    placeholder="AI Theme Generation Key"
-                                    className={fieldClass}
-                                    style={{ color: 'var(--text-primary)' }}
-                                />,
+                                'AI Theme Generation Key',
                             )}
                             <AiConnectionTest
-                                key="gemini"
+                                // Remount when the saved key changes so a result from the old key does not linger.
+                                key={`gemini-${savedAiApiKeys.GEMINI_API_KEY}`}
                                 payload={{
                                     provider: 'gemini',
                                     apiKey: electronSettings.GEMINI_API_KEY || '',
@@ -652,19 +699,13 @@ const DesktopSettingsSubview: React.FC<DesktopSettingsSubviewProps> = ({
                                         () => setElectronSettings({ ...electronSettings, OPENAI_API_STREAM: !electronSettings.OPENAI_API_STREAM }),
                                     )}
                                 </div>
-                                {renderField(
+                                {renderApiKeyField(
+                                    'OPENAI_API_KEY',
                                     t('options.openaiApiKey') || 'OpenAI API Key',
-                                    <input
-                                        type="password"
-                                        value={electronSettings.OPENAI_API_KEY || ''}
-                                        onChange={(e) => setElectronSettings({ ...electronSettings, OPENAI_API_KEY: e.target.value })}
-                                        placeholder="sk-..."
-                                        className={fieldClass}
-                                        style={{ color: 'var(--text-primary)' }}
-                                    />,
+                                    'sk-...',
                                 )}
                                 <AiConnectionTest
-                                    key="openai"
+                                    key={`openai-${savedAiApiKeys.OPENAI_API_KEY}`}
                                     payload={{
                                         provider: 'openai',
                                         apiKey: electronSettings.OPENAI_API_KEY || '',

@@ -17,14 +17,16 @@ import OnlineLyricsTab from './panelTab/OnlineLyricsTab';
 import type { OnlineLyricsState } from '../types';
 import type { AudioQualityPreference } from '../types/onlineMusic';
 import type { ThemeSourceModel } from '../hooks/themeControllerState';
-import { getPlaybackSourceRef, getPlaybackSongSource, hasMixedPlaybackSources } from '../utils/appPlaybackGuards';
-import { resolveLikeAvailability } from '../utils/playerLikeAvailability';
+import { getPlaybackSourceRef } from '../utils/appPlaybackGuards';
+import { canSaveQueueAsLocalPlaylist } from '../utils/queueReorder';
+import { canDislikeCurrentSong, resolveLikeAvailability } from '../utils/playerLikeAvailability';
 import { usePlayerBottomBarBottomPx } from '../hooks/usePlayerBottomBarBottomPx';
 import { getSizedCoverUrl } from '../utils/coverUrl';
 import { openAddToPlaylist, useAddToPlaylistStore } from '../stores/useAddToPlaylistStore';
 import { usePlayerPanelTabShortcut } from '../hooks/usePlayerPanelTabShortcut';
 import { FOLIUM_PANEL_TAB_PREFIX, FoliumPanelTabBody, useFoliumPanelTabs } from '../mods/folium/registries/playerPanelTabs';
 import { countRender } from '../dev/renderCount';
+import { usePlayerOverlayObstacle } from '../hooks/usePlayerOverlayLayout';
 
 const TOUCH_GUIDE_DISPLAY_MS = 1400;
 
@@ -616,9 +618,13 @@ const UnifiedPanel: React.FC<UnifiedPanelProps> = ({
         return () => document.removeEventListener('pointerdown', handlePointerDown);
     }, [isCoverActionsVisible, supportsHover]);
 
+    const { ref: layoutRef, invalidate: invalidateLayout } = usePlayerOverlayObstacle('player-panel', 'panel');
+    const { ref: toggleLayoutRef } = usePlayerOverlayObstacle('panel-toggle', 'panel');
+
     return (
         <motion.div
             style={{ bottom: bottomBarBottomPx }}
+            onUpdate={invalidateLayout}
             className="absolute right-0 z-[60] flex flex-col items-end gap-4 pointer-events-none"
             onClick={(e) => e.stopPropagation()}
         >
@@ -626,6 +632,8 @@ const UnifiedPanel: React.FC<UnifiedPanelProps> = ({
                 <AnimatePresence>
                     {isOpen && (
                         <motion.div
+                            ref={layoutRef}
+                            onUpdate={invalidateLayout}
                             initial={{ opacity: 0, scale: 0.9, originY: 1, originX: 1 }}
                             animate={{ opacity: 1, scale: 1 }}
                             exit={{ opacity: 0, scale: 0.9 }}
@@ -852,6 +860,7 @@ const UnifiedPanel: React.FC<UnifiedPanelProps> = ({
                                                 onNextTrack={onNextTrack}
                                                 onPrevTrack={onPrevTrack}
                                                 onTrash={onFmTrash}
+                                                trashDisabled={playbackControlsDisabled || !canDislikeCurrentSong(currentSong)}
                                                 onLike={onLike}
                                                 isLiked={isLiked}
                                                 likeDisabled={likeDisabled}
@@ -880,12 +889,7 @@ const UnifiedPanel: React.FC<UnifiedPanelProps> = ({
                                                 onMoveSongToNext={onMoveSongToNext}
                                                 onOpenLattice={queue.onOpenLattice}
                                                 // TODO: Define cross-source playlist export before enabling playlist creation for mixed queues.
-                                                canSaveLocalPlaylist={Boolean(
-                                                    isLocal
-                                                    && !hasMixedPlaybackSources(playQueue)
-                                                    && playQueue.length > 0
-                                                    && playQueue.every(song => getPlaybackSongSource(song) === 'local')
-                                                )}
+                                                canSaveLocalPlaylist={canSaveQueueAsLocalPlaylist(currentSong, playQueue)}
                                                 onSaveCurrentQueueAsPlaylist={onSaveCurrentQueueAsPlaylist}
                                                 isDaylight={isDaylight}
                                             />
@@ -968,6 +972,8 @@ const UnifiedPanel: React.FC<UnifiedPanelProps> = ({
                         }
                         transition={{ duration: 0.24, ease: 'easeOut' }}
                         data-testid="panel-toggle"
+                        ref={toggleLayoutRef}
+                        onUpdate={invalidateLayout}
                         style={{ bottom: bottomBarBottomPx }}
                         className="pointer-events-auto fixed right-0 z-[60] pr-4 md:pr-8 group w-20 flex justify-end"
                         onMouseEnter={handleToggleButtonMouseEnter}

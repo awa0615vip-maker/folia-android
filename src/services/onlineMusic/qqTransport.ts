@@ -11,12 +11,21 @@ export const QQ_OPERATIONS = [
     'login_qr_key', 'login_qr_create', 'login_qr_check', 'login_qr_cancel', 'login_status', 'logout',
     'login_channels',
     'user_detail', 'user_playlist', 'user_albums', 'user_liked_songs', 'user_playlist_detail',
+    'user_guess_you_like', 'user_daily_songs', 'recommend_playlists',
+    'user_playlist_tracks', 'user_playlist_subscribe', 'user_subscription_status',
+    'user_song_like', 'user_album_subscribe',
     'music_play', 'song_list_detail', 'song_info',
     'album_info', 'artist_albums', 'artist_songs',
+    'search',
 ] as const;
 
 export type QqOperation = typeof QQ_OPERATIONS[number];
 export type QqParams = Record<string, string | number | boolean | undefined>;
+
+// 写入路由只收 POST + JSON 正文；GET 会回 405。
+const POST_OPERATIONS: ReadonlySet<QqOperation> = new Set<QqOperation>([
+    'user_playlist_tracks', 'user_playlist_subscribe', 'user_song_like', 'user_album_subscribe',
+]);
 
 const ENDPOINTS: Record<QqOperation, string> = {
     login_qr_key: '/login/qr/key',
@@ -34,6 +43,17 @@ const ENDPOINTS: Record<QqOperation, string> = {
     // 带凭据地读登录用户自己的歌单。匿名的 `song_list_detail` 读不了不公开的歌单，这条可以。
     // 与 `login_channels` 同样的处境：旧后端没有这条路由，回 404，调用方要当成「没有声明」。
     user_playlist_detail: '/user/playlist-detail',
+    // 以下是 3.2.0 / 3.3.0 新增的路由：推荐三条要登录（推荐歌单可匿名），写入两条只对本人的歌单生效。
+    // 旧后端一律 404，transport 照例报成 `unsupported`，由调用方决定回落还是报错。
+    user_guess_you_like: '/user/guess-you-like',
+    user_daily_songs: '/user/daily-songs',
+    recommend_playlists: '/recommend/playlists',
+    user_playlist_tracks: '/user/playlist/tracks',
+    user_playlist_subscribe: '/user/playlist/subscribe',
+    user_subscription_status: '/user/subscription-status',
+    // 3.3.1 的红心与收藏专辑：写一次、读回确认后才回成功，结果不明回 502。
+    user_song_like: '/user/song/like',
+    user_album_subscribe: '/user/album/subscribe',
     music_play: '/getMusicPlay',
     song_list_detail: '/getSongListDetail',
     song_info: '/getSongInfo',
@@ -42,6 +62,9 @@ const ENDPOINTS: Record<QqOperation, string> = {
     album_info: '/getAlbumInfo',
     artist_albums: '/getSingerAlbum',
     artist_songs: '/getSingerHotsong',
+    // 3.3.1 的关键字搜索：有会话就带会话搜。匿名搜歌常被上游以 2001 拒绝（#473），带会话的不受这个限额影响。
+    // 拒绝回 502 `search.rejected`；旧后端没有这条路由，照例 404 → `unsupported`。
+    search: '/search',
 };
 
 // qq-music-api translates the native QR states into the Netease codes; 803 is the only one carrying a session.
@@ -87,7 +110,16 @@ const resolveApiBase = async (): Promise<string> => {
         if (electronApiBase) return electronApiBase;
         const port = await readPort();
         if (!port) {
-            throw new OnlineProviderError('unavailable', `Embedded QQMusicApi is not running${await describeEmbeddedStatus()}`, 'qq');
+            // 内嵌后端可能还在启动或刚崩溃重启，持久与否证实不了，所以不写 transient。
+            throw new OnlineProviderError(
+                'unavailable',
+                `Embedded QQMusicApi is not running${await describeEmbeddedStatus()}`,
+                'qq',
+                undefined,
+                undefined,
+                undefined,
+                { stage: 'backend' },
+            );
         }
         electronApiBase = `http://127.0.0.1:${port}`;
         return electronApiBase;
@@ -95,7 +127,16 @@ const resolveApiBase = async (): Promise<string> => {
 
     const base = getWebApiBase();
     if (!base) {
-        throw new OnlineProviderError('unavailable', 'VITE_QQ_API_BASE is not configured', 'qq');
+        // 网页版没配后端地址：重试不会变好，transient:false 让播放侧显示「未配置」而不是「稍后再试」。
+        throw new OnlineProviderError(
+            'unavailable',
+            'VITE_QQ_API_BASE is not configured',
+            'qq',
+            undefined,
+            undefined,
+            undefined,
+            { stage: 'config', transient: false },
+        );
     }
     return base;
 };
@@ -144,6 +185,41 @@ const readJsonBody = async (response: Response): Promise<any> => {
     } catch {
         return undefined;
     }
+};
+
+// 后端失败正文的原文：多数路由写在 `message`，播放等路由的 500 只给 `{ error }`（observability.js），两处都认。
+// 3.2.0 起的新路由另带固定的 `errorKey`（如 `playlist.already-applied`）与可选的上游数字码，`message` 只是通用英文，
+// 所以把这两样一起写进原文，诊断里才看得出是哪一类失败。
+const readBackendMessage = (failure: any): string => {
+    let text = '';
+    for (const candidate of [failure?.message, failure?.error]) {
+        if (typeof candidate === 'string' && candidate.trim()) {
+            text = candidate.trim();
+            break;
+        }
+    }
+    const errorKey = typeof failure?.errorKey === 'string' ? failure.errorKey.trim() : '';
+    const upstreamCode = Number.isSafeInteger(failure?.upstreamCode) ? ` upstream ${failure.upstreamCode}` : '';
+    if (!errorKey) return text;
+    return `${errorKey}${upstreamCode}${text ? `: ${text}` : ''}`;
+};
+
+// 后端对没配好的能力回 501（serverless 入口缺少配置），重试不会变好，与普通 5xx 分开。
+const HTTP_NOT_IMPLEMENTED = 501;
+
+// qq-music-api 的 QqProtocolError 模板（dist/src/services/auth/qrLogin.js 的 callMusicu）：musicu 已经应答（HTTP 2xx），
+// 只是带了非零的全局码或 req_0 码，后端的 handleControllerError 一律把它包成 500 `{ error }`。
+const QQ_PROTOCOL_REFUSAL = /\bfailed \(HTTP 2\d\d, global=(-?\d+), code=(-?\d+|unknown)\)/;
+
+// 从 500 正文里认出「上游有应答、只是业务拒绝」，返回诊断用的上游码：req_0 的码优先，缺失时退回全局码，
+// 两者都没有（应答里没有 req_0）记作 'missing'。认不出就返回 undefined，按普通 5xx 处理。
+const readUpstreamRefusalCode = (backendText: string): number | string | undefined => {
+    const match = QQ_PROTOCOL_REFUSAL.exec(backendText);
+    if (!match) return undefined;
+    const [, globalCode, requestCode] = match;
+    if (requestCode !== 'unknown' && Number(requestCode) !== 0) return Number(requestCode);
+    if (Number(globalCode) !== 0) return Number(globalCode);
+    return 'missing';
 };
 
 // 曲库三条路由被上游拒收时仍然回 HTTP 200，状态码藏在响应体里，而且层级还不一样：
@@ -235,7 +311,20 @@ const endpointFor = (operation: QqOperation, params: QqParams): { path: string; 
 };
 
 // Routes one provider request through the embedded Electron server or the configured Web base URL.
-export const requestQq = async <T = unknown>(operation: QqOperation, params: QqParams = {}): Promise<T> => {
+// 写入路由（POST_OPERATIONS）的参数放在 JSON 正文 `payload` 里；会话照旧走 header 或 `?cookie=`，后端两条路由都认。
+export const requestQq = async <T = unknown>(
+    operation: QqOperation,
+    params: QqParams = {},
+    payload?: Record<string, unknown>,
+): Promise<T> => {
+    const isPost = POST_OPERATIONS.has(operation);
+    if (isPost !== (payload !== undefined)) {
+        throw new OnlineProviderError(
+            'invalid-response',
+            `QQMusicApi ${operation} ${isPost ? 'requires' : 'does not take'} a request body`,
+            'qq',
+        );
+    }
     const base = await resolveApiBase();
 
     const endpoint = endpointFor(operation, params);
@@ -286,9 +375,12 @@ export const requestQq = async <T = unknown>(operation: QqOperation, params: QqP
     // Same-origin serverless calls must retain deployment-protection cookies; external qq-music-api instances
     // answer with `Access-Control-Allow-Origin: *`, so those requests still omit browser credentials.
     const credentials: RequestCredentials = isSameOriginBase(base) ? 'same-origin' : 'omit';
+    const init: RequestInit = isPost
+        ? { method: 'POST', credentials, headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
+        : { credentials, headers };
     let response: Response;
     try {
-        response = await fetch(`${base}${endpoint.path}?${query}`, { credentials, headers });
+        response = await fetch(`${base}${endpoint.path}?${query}`, init);
     } catch (error) {
         // 连后端本身都没连上（内嵌后端退出、远端不可达），与后端回了错误码分开。
         throw new OnlineProviderError(
@@ -300,7 +392,8 @@ export const requestQq = async <T = unknown>(operation: QqOperation, params: QqP
     }
     if (!response.ok) {
         const failure = await readJsonBody(response);
-        const backendMessage = typeof failure?.message === 'string' && failure.message.trim() ? ` (${failure.message.trim()})` : '';
+        const backendText = readBackendMessage(failure);
+        const backendMessage = backendText ? ` (${backendText})` : '';
         // A missing, expired, rejected, or non-persisted backend session is surfaced uniformly as 401.
         if (response.status === 401) {
             clearQqSession();
@@ -318,6 +411,24 @@ export const requestQq = async <T = unknown>(operation: QqOperation, params: QqP
                 response.status,
             );
         }
+        // 3.2.0 起网关码与凭证拒绝码同时出现时，带凭证的旧路由（取链、歌单、登录态）改回 502，正文仍是同一个协议模板
+        // （GatewayCredentialConflictError）。新路由的 502 带 errorKey，是另一套信封，不在这里认。
+        const isLegacyRefusalStatus = response.status === 500
+            || (response.status === 502 && typeof failure?.errorKey !== 'string');
+        const upstreamCode = isLegacyRefusalStatus ? readUpstreamRefusalCode(backendText) : undefined;
+        if (upstreamCode !== undefined) {
+            // 这个 500 / 502 只是后端的外壳，上游其实应答了：与酷狗 Web 端的 502 同理不传 httpStatus、带上 upstreamCode，
+            // 分类器读成 unknown（暂时无法播放），汇总也不把它算作服务异常，不触发 provider 冷却。
+            throw new OnlineProviderError(
+                'network',
+                `QQMusicApi ${operation} failed: HTTP ${response.status}${backendMessage}`,
+                'qq',
+                failure,
+                undefined,
+                readRetryAfterMs(failure, response),
+                { stage: 'upstream', upstreamCode },
+            );
+        }
         throw new OnlineProviderError(
             'network',
             `QQMusicApi ${operation} failed: HTTP ${response.status}${backendMessage}`,
@@ -325,6 +436,7 @@ export const requestQq = async <T = unknown>(operation: QqOperation, params: QqP
             failure,
             response.status,
             readRetryAfterMs(failure, response),
+            response.status === HTTP_NOT_IMPLEMENTED ? { stage: 'config', transient: false } : undefined,
         );
     }
 
