@@ -11,6 +11,7 @@ const PROVIDER_BADGES: Record<string, { label: string; color: string }> = {
     kugou: { label: 'K', color: '#2563eb' },
     qq: { label: 'Q', color: '#16a34a' },
     bodian: { label: '波', color: '#0d9488' },
+    qishui: { label: '汽', color: '#ec4899' },
 };
 
 const FALLBACK_BADGE_COLOR = '#52525b';

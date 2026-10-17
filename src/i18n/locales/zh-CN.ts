@@ -1320,6 +1320,8 @@ export default {
     "loginTitleQq": "扫码登录QQ音乐",
     "loginTitleBodian": "使用波点音乐 App 扫码",
     "loginNoteBodian": "打开波点音乐 App 扫描二维码并确认登录",
+    "loginTitleQishui": "使用汽水音乐 App 扫码",
+    "loginNoteQishui": "打开汽水音乐 App 扫描二维码并确认登录",
     "loginNoteQq": "请选择与账号一致的登录方式：QQ 扫码或微信扫码",
     "qqLoginMethodTitle": "选择登录方式",
     "qqLoginMethodHint": "请选择与 QQ 音乐账号一致的登录方式\nQQ 账号请选择 QQ 扫码，微信账号请选择微信扫码",

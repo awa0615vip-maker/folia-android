@@ -1306,6 +1306,8 @@ export default {
     "loginTitleQq": "Pindai untuk masuk ke QQ Music",
     "loginTitleBodian": "Pindai dengan Bodian Music",
     "loginNoteBodian": "Pindai kode ini dengan aplikasi Bodian Music dan konfirmasi masuk",
+    "loginTitleQishui": "Pindai dengan aplikasi Qishui Music",
+    "loginNoteQishui": "Pindai kode ini dengan aplikasi Qishui Music dan konfirmasi masuk",
     "loginNoteQq": "Pilih metode masuk yang sesuai: pindai QQ atau pindai WeChat",
     "qqLoginMethodTitle": "Pilih metode masuk",
     "qqLoginMethodHint": "Gunakan pindai QQ untuk akun QQ, atau pindai WeChat untuk akun WeChat",

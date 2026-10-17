@@ -1321,6 +1321,8 @@ export default {
     "loginTitleQq": "Scan to sign in to QQ Music",
     "loginTitleBodian": "Scan with Bodian Music",
     "loginNoteBodian": "Scan this code with the Bodian Music app and confirm sign-in",
+    "loginTitleQishui": "Scan with the Qishui Music app",
+    "loginNoteQishui": "Scan this code with the Qishui Music app and confirm sign-in",
     "loginNoteQq": "Choose the sign-in method matching your account: QQ scan or WeChat scan",
     "qqLoginMethodTitle": "Choose sign-in method",
     "qqLoginMethodHint": "Use QQ scan for a QQ account, or WeChat scan for a WeChat account",

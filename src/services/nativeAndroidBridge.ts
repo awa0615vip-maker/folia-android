@@ -36,6 +36,11 @@ const API_HOSTS = [
   // here, which is why a missing host silently returns an empty result rather than an error.
   'kugou.com',
   'kuwo.cn',
+  // 汽水音乐（字节 Luna PC）：passport 扫码、搜索、取流都在 api.qishui.com，整域匹配覆盖
+  // bff-pc / www 等子域；music.douyin.com 是歌词分享页回退源。音频 CDN 走 registerRemoteAudio
+  // 本地代理，不经此桥。漏掉白名单会静默返回空结果而不是报错。
+  'qishui.com',
+  'music.douyin.com',
   'api.qrserver.com',
 ];
 
