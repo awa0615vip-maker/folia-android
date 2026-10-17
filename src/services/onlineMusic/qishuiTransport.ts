@@ -28,6 +28,9 @@ import { coverFromUrlCover } from './qishuiNormalize';
 const COOKIE_STORAGE_KEY = 'cookie';
 const QR_MIN_POLL_MS = 3500;
 const QR_RATE_LIMIT_BACKOFF_MS = 55_000;
+// 取二维码是冷启动首个请求，OkHttp 单例 connectTimeout 恒为 20s（无 Happy-Eyeballs，先试被 VPN 黑洞的 IPv6），
+// 给到 30s 以便在一次 IPv6→IPv4 回退（约 20s+1s）内救回「慢但能通 / 仅 IPv6 不通」的网络。
+const QR_CREATE_TIMEOUT_MS = 30_000;
 
 // ─── 运行环境可用性 ────────────────────────────────────────────────────────
 
@@ -161,12 +164,15 @@ async function qishuiFetch(url: string, options: QishuiRequestOptions = {}): Pro
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
+        // foliaTimeoutMs 是原生桥自定义字段：把本地算出的请求预算透传给安卓 OkHttp 桥，
+        // 否则桥会对所有汽水请求一律 15s 硬封顶（即便这里已设 AbortController 也无济于事）。
         const response = await fetch(url, {
             method,
             headers,
             body,
             signal: controller.signal,
-        });
+            foliaTimeoutMs: timeoutMs,
+        } as RequestInit & { foliaTimeoutMs?: number });
         // 业务域 cookie 合并进会话（扫码登录态在这里落地）。
         const fresh = collectSetCookies(response);
         if (Object.keys(fresh).length) {
@@ -174,7 +180,14 @@ async function qishuiFetch(url: string, options: QishuiRequestOptions = {}): Pro
         }
         return response;
     } catch (error) {
-        throw new OnlineProviderError('network', `汽水音乐请求失败: ${url}`, QISHUI_PROVIDER_ID, error);
+        // 中止 / 连接或读取超时（含桥侧报的 connect timeout / network unreachable）时给出可操作文案。
+        const cause = error instanceof Error ? error : new Error(String(error));
+        const isTimeout = cause.name === 'AbortError'
+            || /timed out|timeout|failed to connect|network is unreachable|enetunreach/i.test(cause.message);
+        const message = isTimeout
+            ? `汽水音乐连接超时，请关闭 VPN/代理或切换网络（Wi-Fi/流量）后重试: ${url}`
+            : `汽水音乐请求失败: ${url}`;
+        throw new OnlineProviderError('network', message, QISHUI_PROVIDER_ID, cause);
     } finally {
         clearTimeout(timer);
     }
@@ -235,7 +248,10 @@ export interface QishuiQrCreate {
 export async function createQrLogin(): Promise<QishuiQrCreate> {
     // 首次调用会把 get_qrcode 下发的 passport cookie 收进会话（用于随后 check_qrconnect）。
     const url = `${QISHUI_API}/passport/web/get_qrcode/?${passportQuery('create')}`;
-    const response = await qishuiFetch(url, { extraHeaders: passportHeaders() });
+    const response = await qishuiFetch(url, {
+        extraHeaders: passportHeaders(),
+        timeoutMs: QR_CREATE_TIMEOUT_MS,
+    });
     if (response.status >= 400) {
         throw new OnlineProviderError('network', `二维码获取失败 HTTP ${response.status}`, QISHUI_PROVIDER_ID,
             undefined, response.status);
