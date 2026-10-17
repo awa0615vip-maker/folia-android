@@ -42,17 +42,26 @@ type WallPointerPanOptions = {
      * 由视图固定（相机只平移），需要由宿主自己的缩放模型支持，暂不启用。
      */
     enablePinch?: boolean;
+    /** 拖拽真正开始（位移超过阈值）时回调；用于临时降低动画帧率，让 GPU 优先跟手。 */
+    onGestureStart?: () => void;
+    /** 拖拽结束（松手且惯性结束）时回调；用于恢复动画帧率。 */
+    onGestureEnd?: () => void;
 };
 
 export const useWallPointerPan = ({
     applyCamera, animationRef, stopPan, containerRef, reducedMotion, overscan, clampCamera,
-    bounds, cameraRef, getWorldBounds, viewportRef, enablePinch = false,
+    bounds, cameraRef, getWorldBounds, viewportRef, enablePinch = false, onGestureStart, onGestureEnd,
 }: WallPointerPanOptions) => {
     const boundsRef = useRef(bounds);
     boundsRef.current = bounds;
     // 钳制函数每次渲染可能是新身份，但它只在这里被读，用 ref 接住就不会把 updateCamera 的身份弄脏。
     const clampCameraRef = useRef(clampCamera);
     clampCameraRef.current = clampCamera;
+    // 手势回调每次渲染可能是新身份，用 ref 接住，不污染下面各 useCallback 的依赖。
+    const onGestureStartRef = useRef(onGestureStart);
+    onGestureStartRef.current = onGestureStart;
+    const onGestureEndRef = useRef(onGestureEnd);
+    onGestureEndRef.current = onGestureEnd;
     const pointerRef = useRef<{
         id: number;
         start: { x: number; y: number };
@@ -179,6 +188,8 @@ export const useWallPointerPan = ({
             pointer.dragged = true;
             didDragRef.current = true;
             event.currentTarget.setPointerCapture(event.pointerId);
+            // 真正开始拖动：临时降低动画帧率，GPU 优先跟手。
+            onGestureStartRef.current?.();
         }
         const elapsed = event.timeStamp - pointer.last.time;
         if (elapsed > 0) {
@@ -207,15 +218,25 @@ export const useWallPointerPan = ({
         const pointer = pointerRef.current;
         if (!pointer || pointer.id !== event.pointerId) return;
         pointerRef.current = null;
-        if (!pointer.dragged || reducedMotion || event.timeStamp - pointer.last.time > WALL_PAN_INERTIA.staleReleaseMs) return;
+        // 没真正拖过（位移小于阈值）就松手：没触发过手势开始，无需结束。
+        if (!pointer.dragged) return;
+        // 走到这说明是一次真实拖拽（已 start）。不进惯性（减弱动效 / 松手过久 / 速度太低）时，直接恢复帧率。
+        if (reducedMotion || event.timeStamp - pointer.last.time > WALL_PAN_INERTIA.staleReleaseMs) {
+            onGestureEndRef.current?.();
+            return;
+        }
         const speed = Math.hypot(pointer.vx, pointer.vy);
-        if (speed < WALL_PAN_INERTIA.minSpeed) return;
+        if (speed < WALL_PAN_INERTIA.minSpeed) {
+            onGestureEndRef.current?.();
+            return;
+        }
         const from = cameraRef.current;
         const velocity = Math.min(speed, WALL_PAN_INERTIA.maxSpeed);
         animationRef.current = animate(0, velocity * WALL_PAN_INERTIA.power, {
             type: 'inertia', velocity, power: WALL_PAN_INERTIA.power, timeConstant: WALL_PAN_INERTIA.timeConstant,
             restDelta: WALL_PAN_INERTIA.restDelta,
             onUpdate: distance => updateCamera(from.x + distance * pointer.vx / speed, from.y + distance * pointer.vy / speed),
+            onComplete: () => { onGestureEndRef.current?.(); },
         });
     }, [animationRef, cameraRef, reducedMotion, updateCamera]);
 
@@ -223,7 +244,11 @@ export const useWallPointerPan = ({
         if (!pointersRef.current.has(event.pointerId)) return;
         pointersRef.current.delete(event.pointerId);
         if (pointersRef.current.size < 2) pinchRef.current = null;
-        if (pointerRef.current?.id === event.pointerId) pointerRef.current = null;
+        if (pointerRef.current?.id === event.pointerId) {
+            // 拖拽被中途打断（来电/切后台/手势取消）：若已真正开始拖动，恢复帧率。
+            if (pointerRef.current.dragged) onGestureEndRef.current?.();
+            pointerRef.current = null;
+        }
         interrupt();
     }, [interrupt]);
 

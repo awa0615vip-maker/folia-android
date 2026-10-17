@@ -31,6 +31,7 @@ import { resolveWallHandoffRole, useWallHandoffStore } from '../../../stores/use
 import { useLatticeWallHandoff } from './useLatticeWallHandoff';
 import { wallFirstScreenStarted, notifyWallFirstScreenReady } from '../../../utils/wallFirstScreenGate';
 import { IS_ANDROID_WEBVIEW } from '../../../utils/platform';
+import { setWallGestureThrottle } from '../../../utils/frameRateLimiter';
 import { resolveEffectiveTier, usePerformanceTierStore } from '../../../stores/usePerformanceTierStore';
 import { getPerformanceProfile } from '../../../utils/performanceProfile';
 
@@ -425,6 +426,9 @@ export default function PosterWall({
         cameraRef,
         getWorldBounds,
         viewportRef,
+        // 滑动海报墙期间临时压低动画帧率，让 GPU 优先跟手（播放时歌词/可视化不再抢帧）；松手惯性结束自动恢复。
+        onGestureStart: () => setWallGestureThrottle(true),
+        onGestureEnd: () => setWallGestureThrottle(false),
     });
 
     // Only the block holding the open card is re-geared; every other poster keeps its base rect.

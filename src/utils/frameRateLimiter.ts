@@ -15,6 +15,8 @@ type FrameRateLimitedRaf = {
     getFrameRate: () => VisualizerFrameRate;
     /** 进入后台时冻结所有 RAF 回调（可视化器/动画停止绘制），回到前台时恢复；音频播放不受影响。 */
     setBackgroundPaused: (paused: boolean) => void;
+    /** 拖拽海报墙等手势期间，临时把所有动画帧率压到 15fps，让 GPU 优先跟手；松手/惯性结束后恢复。 */
+    setGestureThrottled: (throttled: boolean) => void;
 };
 
 type WindowWithVisualizerFrameRateLimiter = Window & {
@@ -47,7 +49,7 @@ export const parseVisualizerFrameRate = (value: string | null): VisualizerFrameR
 export const shouldProcessFrameAtRate = (
     timestampMs: number,
     lastProcessedTimestampMs: number,
-    frameRate: VisualizerFrameRate,
+    frameRate: VisualizerFrameRate | number,
 ) => {
     if (frameRate === 'off') {
         return true;
@@ -75,6 +77,8 @@ export const createFrameRateLimitedRaf = (
     let nativeFrameHandle: number | null = null;
     let lastProcessedTimestamp = 0;
     let backgroundPaused = false;
+    // 手势节流：拖拽/惯性期间把动画帧率压到 15fps，松开恢复。
+    let gestureThrottled = false;
     const callbacks = new Map<number, AnimationFrameCallback>();
 
     const scheduleNativeFrame = () => {
@@ -93,7 +97,7 @@ export const createFrameRateLimitedRaf = (
             return;
         }
 
-        if (!shouldProcessFrameAtRate(timestamp, lastProcessedTimestamp, frameRate)) {
+        if (!shouldProcessFrameAtRate(timestamp, lastProcessedTimestamp, gestureThrottled ? 15 : frameRate)) {
             scheduleNativeFrame();
             return;
         }
@@ -157,6 +161,18 @@ export const createFrameRateLimitedRaf = (
                 scheduleNativeFrame();
             }
         },
+        setGestureThrottled: (throttled) => {
+            if (gestureThrottled === throttled) {
+                return;
+            }
+            gestureThrottled = throttled;
+            lastProcessedTimestamp = 0;
+            if (nativeFrameHandle !== null) {
+                nativeCancelAnimationFrame(nativeFrameHandle);
+                nativeFrameHandle = null;
+            }
+            scheduleNativeFrame();
+        },
     };
 };
 
@@ -198,6 +214,12 @@ export const setGlobalVisualizerFrameRate = (frameRate: VisualizerFrameRate) => 
     }
 
     installedLimiter.setFrameRate(frameRate);
+};
+
+// 拖拽海报墙等手势期间，临时把动画帧率压到 15fps（歌词/可视化/卡片入场动画让路，GPU 优先跟手）；
+// 松手/惯性结束后恢复档位帧率。若帧率门未安装（用户手动选了"不限制"），此调用为空操作。
+export const setWallGestureThrottle = (throttled: boolean) => {
+    installedLimiter?.setGestureThrottled(throttled);
 };
 
 export const restoreGlobalVisualizerFrameRateLimiter = () => {
