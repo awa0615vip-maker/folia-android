@@ -80,6 +80,21 @@ public class MainActivity extends BridgeActivity {
     }
 
     @Override
+    public void onStart() {
+        super.onStart();
+        // 回到前台：Web 层恢复可视化渲染并检查音频是否被系统挂起，需要时从断点续播。
+        FoliaNativePlugin.emitAppLifecycle("foreground");
+    }
+
+    @Override
+    public void onStop() {
+        super.onStop();
+        // 切到后台（Home/锁屏/切任务）：WebView 不会收到页面级 visibilitychange，这里显式通知
+        // Web 层暂停可视化渲染（仅保留音频），避免不可见时继续吃 GPU/CPU 导致“退出软件很卡”。
+        FoliaNativePlugin.emitAppLifecycle("background");
+    }
+
+    @Override
     public void onResume() {
         super.onResume();
         if (getBridge() != null) {

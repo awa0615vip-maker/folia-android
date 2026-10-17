@@ -13,6 +13,8 @@ type FrameRateLimitedRaf = {
     cancelAnimationFrame: CancelAnimationFrameFn;
     setFrameRate: (frameRate: VisualizerFrameRate) => void;
     getFrameRate: () => VisualizerFrameRate;
+    /** 进入后台时冻结所有 RAF 回调（可视化器/动画停止绘制），回到前台时恢复；音频播放不受影响。 */
+    setBackgroundPaused: (paused: boolean) => void;
 };
 
 type WindowWithVisualizerFrameRateLimiter = Window & {
@@ -72,10 +74,11 @@ export const createFrameRateLimitedRaf = (
     let nextHandle = 1;
     let nativeFrameHandle: number | null = null;
     let lastProcessedTimestamp = 0;
+    let backgroundPaused = false;
     const callbacks = new Map<number, AnimationFrameCallback>();
 
     const scheduleNativeFrame = () => {
-        if (nativeFrameHandle !== null || callbacks.size === 0) {
+        if (nativeFrameHandle !== null || callbacks.size === 0 || backgroundPaused) {
             return;
         }
 
@@ -84,6 +87,11 @@ export const createFrameRateLimitedRaf = (
 
     const processNativeFrame = (timestamp: number) => {
         nativeFrameHandle = null;
+
+        // 后台冻结：不执行任何回调，也不再排下一帧，等 setBackgroundPaused(false) 恢复。
+        if (backgroundPaused) {
+            return;
+        }
 
         if (!shouldProcessFrameAtRate(timestamp, lastProcessedTimestamp, frameRate)) {
             scheduleNativeFrame();
@@ -134,10 +142,45 @@ export const createFrameRateLimitedRaf = (
             scheduleNativeFrame();
         },
         getFrameRate: () => frameRate,
+        setBackgroundPaused: (paused) => {
+            if (backgroundPaused === paused) {
+                return;
+            }
+            backgroundPaused = paused;
+            if (paused) {
+                if (nativeFrameHandle !== null) {
+                    nativeCancelAnimationFrame(nativeFrameHandle);
+                    nativeFrameHandle = null;
+                }
+            } else {
+                lastProcessedTimestamp = 0;
+                scheduleNativeFrame();
+            }
+        },
     };
 };
 
 let installedLimiter: FrameRateLimitedRaf | null = null;
+
+/**
+ * 进后台冻结/回前台恢复全部可视化器与动画的 RAF。
+ * 若用户选了“不限帧率”（此时 RAF 尚未被接管），进入后台时先装一个透明门（frameRate='off'，
+ * 前台不限制帧率），仅为获得统一的后台冻结入口；前台帧率不受影响。
+ */
+export const setVisualizerBackgroundPaused = (paused: boolean) => {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    if (paused) {
+        if (!installedLimiter) {
+            installGlobalVisualizerFrameRateLimiter('off', true);
+        }
+        installedLimiter?.setBackgroundPaused(true);
+    } else {
+        installedLimiter?.setBackgroundPaused(false);
+    }
+};
 
 export const setGlobalVisualizerFrameRate = (frameRate: VisualizerFrameRate) => {
     if (typeof window === 'undefined') {
@@ -172,7 +215,10 @@ export const restoreGlobalVisualizerFrameRateLimiter = () => {
     installedLimiter = null;
 };
 
-export const installGlobalVisualizerFrameRateLimiter = (overrideFrameRate?: VisualizerFrameRate) => {
+export const installGlobalVisualizerFrameRateLimiter = (
+    overrideFrameRate?: VisualizerFrameRate,
+    forceInstallTransparentGate = false,
+) => {
     if (typeof window === 'undefined') {
         return;
     }
@@ -188,7 +234,9 @@ export const installGlobalVisualizerFrameRateLimiter = (overrideFrameRate?: Visu
         && IS_ANDROID_WEBVIEW
         ? 30
         : initialFrameRate;
-    if (effectiveFrameRate === 'off') {
+    // forceInstallTransparentGate：即使帧率为 'off'（不限制），也安装一个“每帧全过”的透明包装器，
+    // 仅用于接管 RAF，使后台冻结开关对选择了“不限帧率”的用户同样生效；前台帧率不受影响。
+    if (effectiveFrameRate === 'off' && !forceInstallTransparentGate) {
         restoreGlobalVisualizerFrameRateLimiter();
         return;
     }

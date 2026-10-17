@@ -63,4 +63,6 @@
     <!-- 睡眠定时器：允许在 Doze/后台下使用精确闹钟准时暂停播放 -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <!-- 应用内更新：下载完 APK 后调起系统安装器 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 </manifest>

@@ -11,6 +11,7 @@ import { installDebugModule } from './services/debug/debugModule';
 import { installMemorySampleFeed } from './services/debug/memorySamples';
 import { installFrameTimingDiagnostics } from './utils/frameTimingDiagnostics';
 import { installNativeAndroidBridge } from './services/nativeAndroidBridge';
+import { installAndroidAppLifecycle } from './services/androidAppLifecycle';
 import { installAndroidPhoneFitPreference } from './services/androidPhoneLayout';
 import { installKeepScreenOnPreference } from './services/androidKeepScreenOn';
 // import { installCoverSizeAudit } from './services/debug/coverSizeSamples';
@@ -46,6 +47,8 @@ installAndroidPhoneFitPreference();
 // 屏幕常亮：启动时套用保存的开关状态（安卓走原生窗口标志）。
 installKeepScreenOnPreference();
 void installNativeAndroidBridge();
+// 前后台生命周期：进后台冻结可视化渲染只保留音频、回前台检查并续播被系统挂起的音频。
+installAndroidAppLifecycle();
 
 // 低端省电档且用户从未手动选过可视化器时，预设为官方静态低资源模式（still）。
 // 必须在动态 import('./bootstrap') 之前写入 localStorage —— 可视化器 store 首次读取就会拿到它；

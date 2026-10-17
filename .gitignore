@@ -52,6 +52,8 @@ TODO.MD
 commit.md
 .codebuff-ai/reasson/conf.jsonc
 scripts/*
+# 保留发版用的版本号自增脚本
+!scripts/bump-version.mjs
 docs/TODO.md
 design/
 plan/

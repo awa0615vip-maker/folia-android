@@ -90,6 +90,7 @@ import { useLocalLibraryAutoScan } from './hooks/useLocalLibraryAutoScan';
 import { useElectronVideoExportController } from './hooks/useElectronVideoExportController';
 import { useElectronWindowPlaybackHandoff } from './hooks/useElectronWindowPlaybackHandoff';
 import { useMediaSessionBridge } from './hooks/useMediaSessionBridge';
+import { useAndroidBackgroundPlaybackGuard } from './hooks/useAndroidBackgroundPlaybackGuard';
 import { usePlayerChromeAutoHide } from './hooks/usePlayerChromeAutoHide';
 import { usePlaybackAudioBridge } from './hooks/usePlaybackAudioBridge';
 import { useTranscodeFallback } from './hooks/useTranscodeFallback';
@@ -1475,6 +1476,13 @@ export default function App() {
         mediaSessionPrevRef,
         mediaSessionNextRef,
         isNowPlayingControlDisabledRef,
+    });
+
+    // 回前台音频看门狗：修复华为/低端机切后台后被系统挂起、再进播放器要重新播放的问题。
+    useAndroidBackgroundPlaybackGuard({
+        getDisplayAudioElement: automix.getDisplayElement,
+        audioRef,
+        resumePlayback,
     });
 
     const {

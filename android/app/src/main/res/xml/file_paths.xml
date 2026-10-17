@@ -2,4 +2,6 @@
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <external-path name="my_images" path="." />
     <cache-path name="my_cache_images" path="." />
+    <!-- 应用内更新：getExternalFilesDir(Download)/Folia 下的 APK，供 FileProvider 分享给安装器 -->
+    <external-files-path name="update_downloads" path="Download" />
 </paths>

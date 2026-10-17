@@ -8,7 +8,7 @@
     "email": "chthollyphile@users.noreply.github.com"
   },
   "private": true,
-  "version": "0.7.17-android.124",
+  "version": "0.7.17-android.125",
   "license": "AGPL-3.0",
   "type": "module",
   "engines": {
@@ -23,6 +23,7 @@
     "cap:open:android": "cap open android",
     "cap:run:android": "npm run build:capacitor && cap run android",
     "build:android:debug": "npm run cap:sync:android && cd android && gradlew.bat assembleDebug",
+    "bump": "node scripts/bump-version.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "codemap": "node dev/mcp/ts-code-map/codemap.mjs",

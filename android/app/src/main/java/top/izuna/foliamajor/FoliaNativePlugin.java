@@ -3,17 +3,22 @@ package top.izuna.foliamajor;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlarmManager;
+import android.app.DownloadManager;
 import android.app.PendingIntent;
 import android.content.ClipData;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.BroadcastReceiver;
+import android.content.IntentFilter;
 import android.database.Cursor;
 import android.os.Build;
+import android.os.Environment;
 import android.os.SystemClock;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
 import android.provider.MediaStore;
+import android.provider.Settings;
 import android.webkit.CookieManager;
 import android.webkit.WebView;
 import android.view.WindowManager;
@@ -22,6 +27,7 @@ import android.util.Base64;
 
 import androidx.activity.result.ActivityResult;
 import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 
 import com.getcapacitor.PermissionState;
 import com.getcapacitor.JSArray;
@@ -100,6 +106,12 @@ public class FoliaNativePlugin extends Plugin {
     // 已布防闹钟的触发时刻（基于 SystemClock.elapsedRealtime()，不受系统时间/时区影响）；0 表示未布防。
     private static volatile long sleepTimerDeadlineElapsedMs = 0L;
 
+    // ===== 应用内更新（下载 APK 并安装） =====
+    // APK 固定下载到应用专属下载目录（无需存储权限），每次覆盖，避免堆积。
+    private static final String UPDATE_SUB_PATH = "Folia/folia-update.apk";
+    private long updateDownloadId = -1L;
+    private BroadcastReceiver updateDownloadReceiver;
+
     @Override
     public void load() {
         instance = this;
@@ -107,6 +119,14 @@ public class FoliaNativePlugin extends Plugin {
 
     @Override
     protected void handleOnDestroy() {
+        if (updateDownloadReceiver != null) {
+            try {
+                getContext().unregisterReceiver(updateDownloadReceiver);
+            } catch (Exception ignored) {
+                // receiver 未注册或已注销时忽略。
+            }
+            updateDownloadReceiver = null;
+        }
         if (instance == this) instance = null;
         super.handleOnDestroy();
     }
@@ -117,6 +137,23 @@ public class FoliaNativePlugin extends Plugin {
         JSObject payload = new JSObject();
         payload.put("action", action);
         plugin.getActivity().runOnUiThread(() -> plugin.notifyListeners("mediaAction", payload));
+    }
+
+    /**
+     * Activity 前后台切换：onStart → "foreground"，onStop → "background"。
+     * WebView 作为原生视图被切到后台时通常不会触发页面的 visibilitychange，
+     * 因此由原生显式通知 Web 层：进后台暂停可视化渲染（只保留音频），回前台检查并续播。
+     */
+    static void emitAppLifecycle(String state) {
+        FoliaNativePlugin plugin = instance;
+        if (plugin == null) return;
+        Activity activity = plugin.getActivity();
+        if (activity == null) return;
+        activity.runOnUiThread(() -> {
+            JSObject payload = new JSObject();
+            payload.put("state", state);
+            plugin.notifyListeners("appLifecycle", payload);
+        });
     }
 
     /**
@@ -168,6 +205,212 @@ public class FoliaNativePlugin extends Plugin {
             return url.getProtocol() + "://" + url.getHost() + url.getPath();
         } catch (Exception ignored) {
             return "invalid";
+        }
+    }
+
+    // ===== 应用内更新 =====
+
+    private File resolveUpdateFile() {
+        return new File(getContext().getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), UPDATE_SUB_PATH);
+    }
+
+    @PluginMethod
+    public void getAppInfo(PluginCall call) {
+        try {
+            android.content.pm.PackageInfo info = getContext().getPackageManager()
+                .getPackageInfo(getContext().getPackageName(), 0);
+            String versionName = info.versionName != null ? info.versionName : "";
+            long versionCode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                ? info.getLongVersionCode()
+                : info.versionCode;
+            JSObject result = new JSObject();
+            result.put("versionName", versionName);
+            result.put("versionCode", versionCode);
+            result.put("packageName", getContext().getPackageName());
+            call.resolve(result);
+        } catch (Exception error) {
+            call.reject("getAppInfo failed: " + error.getMessage());
+        }
+    }
+
+    /** 用系统 DownloadManager 下载 APK：通知栏可见、支持后台与断点续传，下载到应用专属目录（无需存储权限）。 */
+    @PluginMethod
+    public void downloadUpdate(PluginCall call) {
+        String url = call.getString("url");
+        if (url == null || url.isEmpty()) {
+            call.reject("Missing url");
+            return;
+        }
+        try {
+            File target = resolveUpdateFile();
+            File parent = target.getParentFile();
+            if (parent != null && !parent.exists()) parent.mkdirs();
+            if (target.exists()) target.delete();
+
+            DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+            request.setTitle("Folia 更新");
+            request.setDescription("正在下载最新版本，完成后将自动安装…");
+            request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            request.setAllowedNetworkTypes(
+                DownloadManager.Request.NETWORK_WIFI | DownloadManager.Request.NETWORK_MOBILE);
+            request.setMimeType("application/vnd.android.package-archive");
+            request.setDestinationInExternalFilesDir(
+                getContext(), Environment.DIRECTORY_DOWNLOADS, UPDATE_SUB_PATH);
+            request.addRequestHeader("Accept", "application/vnd.android.package-archive");
+
+            DownloadManager manager = (DownloadManager) getContext().getSystemService(Context.DOWNLOAD_SERVICE);
+            if (manager == null) {
+                call.reject("DownloadManager unavailable");
+                return;
+            }
+            long id = manager.enqueue(request);
+            updateDownloadId = id;
+            ensureUpdateReceiver();
+            JSObject result = new JSObject();
+            result.put("downloadId", id);
+            call.resolve(result);
+        } catch (Exception error) {
+            call.reject("downloadUpdate failed: " + error.getMessage());
+        }
+    }
+
+    /** 轮询下载进度（Web 端每秒调用）。 */
+    @PluginMethod
+    public void getDownloadProgress(PluginCall call) {
+        long id = call.getLong("downloadId", updateDownloadId);
+        DownloadManager manager = (DownloadManager) getContext().getSystemService(Context.DOWNLOAD_SERVICE);
+        if (manager == null) {
+            call.reject("DownloadManager unavailable");
+            return;
+        }
+        int status = -1;
+        long downloaded = 0;
+        long total = 0;
+        int reason = 0;
+        try (Cursor cursor = manager.query(new DownloadManager.Query().setFilterById(id))) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int sIdx = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS);
+                int dIdx = cursor.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR);
+                int tIdx = cursor.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES);
+                int rIdx = cursor.getColumnIndex(DownloadManager.COLUMN_REASON);
+                if (sIdx >= 0) status = cursor.getInt(sIdx);
+                if (dIdx >= 0) downloaded = cursor.getLong(dIdx);
+                if (tIdx >= 0) total = cursor.getLong(tIdx);
+                if (rIdx >= 0) reason = cursor.getInt(rIdx);
+            }
+        } catch (Exception ignored) {
+            // 查询失败返回 unknown。
+        }
+        call.resolve(progressObject(id, mapDownloadStatus(status), downloaded, total, reason));
+    }
+
+    /** 手动触发安装（授权“未知来源”后 Web 端可再次调用）。 */
+    @PluginMethod
+    public void installDownloadedUpdate(PluginCall call) {
+        boolean ok = installDownloadedApk();
+        JSObject result = new JSObject();
+        result.put("ok", ok);
+        call.resolve(result);
+    }
+
+    private String mapDownloadStatus(int status) {
+        switch (status) {
+            case DownloadManager.STATUS_PENDING: return "pending";
+            case DownloadManager.STATUS_RUNNING: return "running";
+            case DownloadManager.STATUS_PAUSED: return "paused";
+            case DownloadManager.STATUS_SUCCESSFUL: return "successful";
+            case DownloadManager.STATUS_FAILED: return "failed";
+            default: return "unknown";
+        }
+    }
+
+    private JSObject progressObject(long id, String status, long downloaded, long total, int reason) {
+        JSObject obj = new JSObject();
+        obj.put("downloadId", id);
+        obj.put("status", status);
+        obj.put("downloaded", downloaded);
+        obj.put("total", total);
+        obj.put("reason", reason);
+        return obj;
+    }
+
+    private void ensureUpdateReceiver() {
+        if (updateDownloadReceiver != null) return;
+        updateDownloadReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (!DownloadManager.ACTION_DOWNLOAD_COMPLETE.equals(intent.getAction())) return;
+                long id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L);
+                if (id != updateDownloadId) return;
+
+                int status = queryDownloadStatus(id);
+                boolean success = status == DownloadManager.STATUS_SUCCESSFUL;
+                JSObject payload = new JSObject();
+                payload.put("downloadId", id);
+                payload.put("success", success);
+                payload.put("status", mapDownloadStatus(status));
+
+                if (success) {
+                    boolean installing = installDownloadedApk();
+                    payload.put("installing", installing);
+                    notifyListeners("updateDownloadProgress",
+                        progressObject(id, "completed", 0, 0, 0));
+                } else {
+                    notifyListeners("updateDownloadProgress",
+                        progressObject(id, "failed", 0, 0, 0));
+                }
+                notifyListeners("updateDownloadComplete", payload);
+            }
+        };
+        IntentFilter filter = new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getContext().registerReceiver(updateDownloadReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            getContext().registerReceiver(updateDownloadReceiver, filter);
+        }
+    }
+
+    private int queryDownloadStatus(long id) {
+        DownloadManager manager = (DownloadManager) getContext().getSystemService(Context.DOWNLOAD_SERVICE);
+        if (manager == null) return -1;
+        try (Cursor cursor = manager.query(new DownloadManager.Query().setFilterById(id))) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int idx = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS);
+                if (idx >= 0) return cursor.getInt(idx);
+            }
+        } catch (Exception ignored) {
+            // 忽略查询异常。
+        }
+        return -1;
+    }
+
+    /** 弹出系统安装器。返回 false 表示需要先引导用户授予“允许安装未知应用”。 */
+    private boolean installDownloadedApk() {
+        try {
+            File apk = resolveUpdateFile();
+            if (!apk.exists() || apk.length() == 0) return false;
+            Context context = getContext();
+            Uri uri = FileProvider.getUriForFile(
+                context, context.getPackageName() + ".fileprovider", apk);
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                && !context.getPackageManager().canRequestPackageInstalls()) {
+                Intent settings = new Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:" + context.getPackageName()));
+                settings.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                context.startActivity(settings);
+                return false;
+            }
+
+            Intent install = new Intent(Intent.ACTION_VIEW);
+            install.setDataAndType(uri, "application/vnd.android.package-archive");
+            install.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            install.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(install);
+            return true;
+        } catch (Exception error) {
+            return false;
         }
     }
 

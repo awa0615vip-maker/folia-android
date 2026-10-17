@@ -9,6 +9,9 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.content.Intent;
 import android.net.wifi.WifiManager;
+import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
+import android.media.AudioManager;
 import android.media.MediaMetadata;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
@@ -47,6 +50,38 @@ public class FoliaPlaybackService extends Service {
     private WifiManager.WifiLock wifiLock;
     private static volatile String powerDiagnostic = "inactive";
 
+    // 音频焦点：显式向系统声明“本应用正在播放媒体”。华为/鸿蒙等 ROM 对 WebView 后台冻结尤其激进，
+    // 没有音频焦点时系统更容易在切后台后挂起 WebView 里的音频流；持有焦点后后台播放稳定得多。
+    private AudioManager audioManager;
+    private AudioFocusRequest audioFocusRequest;
+    private boolean audioFocusHeld = false;
+    private boolean transientlyLostFocus = false;
+
+    private final AudioManager.OnAudioFocusChangeListener audioFocusListener = focusChange -> {
+        switch (focusChange) {
+            case AudioManager.AUDIOFOCUS_LOSS:
+                // 永久丢失（用户切到别的播放器）：放弃焦点并通知 Web 暂停，不自动恢复。
+                transientlyLostFocus = false;
+                abandonAudioFocus();
+                emit("pause");
+                break;
+            case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
+            case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK:
+                // 短暂丢失（来电、导航语音）：先暂停，等 AUDIOFOCUS_GAIN 再续播。
+                transientlyLostFocus = true;
+                emit("pause");
+                break;
+            case AudioManager.AUDIOFOCUS_GAIN:
+                if (transientlyLostFocus) {
+                    transientlyLostFocus = false;
+                    emit("play");
+                }
+                break;
+            default:
+                break;
+        }
+    };
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -73,6 +108,7 @@ public class FoliaPlaybackService extends Service {
             wifiLock = wifiManager.createWifiLock(lockMode, "Folia:Playback");
             wifiLock.setReferenceCounted(false);
         }
+        audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
     }
 
     @Override
@@ -287,6 +323,7 @@ public class FoliaPlaybackService extends Service {
             if (playing) {
                 if (wakeLock != null && !wakeLock.isHeld()) wakeLock.acquire();
                 if (wifiLock != null && !wifiLock.isHeld()) wifiLock.acquire();
+                ensureAudioFocus();
             } else {
                 if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
                 if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
@@ -303,6 +340,51 @@ public class FoliaPlaybackService extends Service {
 
     static String getPowerDiagnostic() {
         return powerDiagnostic;
+    }
+
+    /** 播放时持有媒体音频焦点；已持有则不重复请求。 */
+    private void ensureAudioFocus() {
+        if (audioManager == null || audioFocusHeld) return;
+        try {
+            int result;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                AudioAttributes attributes = new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build();
+                audioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(attributes)
+                    .setWillPauseWhenDucked(false)
+                    .setOnAudioFocusChangeListener(audioFocusListener)
+                    .build();
+                result = audioManager.requestAudioFocus(audioFocusRequest);
+            } else {
+                result = audioManager.requestAudioFocus(
+                    audioFocusListener,
+                    AudioManager.STREAM_MUSIC,
+                    AudioManager.AUDIOFOCUS_GAIN
+                );
+            }
+            audioFocusHeld = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+        } catch (Exception ignored) {
+            audioFocusHeld = false;
+        }
+    }
+
+    /** 服务停止时释放音频焦点。 */
+    private void abandonAudioFocus() {
+        if (audioManager == null) return;
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && audioFocusRequest != null) {
+                audioManager.abandonAudioFocusRequest(audioFocusRequest);
+                audioFocusRequest = null;
+            } else {
+                audioManager.abandonAudioFocus(audioFocusListener);
+            }
+        } catch (Exception ignored) {
+            // 焦点释放失败不影响服务销毁。
+        }
+        audioFocusHeld = false;
     }
 
     private void createNotificationChannel() {
@@ -324,6 +406,7 @@ public class FoliaPlaybackService extends Service {
     @Override
     public void onDestroy() {
         updatePlaybackLocks(false);
+        abandonAudioFocus();
         artworkExecutor.shutdownNow();
         if (mediaSession != null) {
             mediaSession.setActive(false);

@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
-import { Gauge, MonitorCog } from 'lucide-react';
+import { Download, Gauge, MonitorCog } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import type { Theme, VisualizerFrameRate } from '../../../types';
 import { VISUALIZER_FRAME_RATE_OPTIONS } from '../../../utils/frameRateLimiter';
+import { IS_ANDROID_WEBVIEW } from '../../../utils/platform';
 import ThemedDialog from '../../shared/ThemedDialog';
 import { SettingsAnchor } from './navigation/SettingsAnchorContext';
 import SettingsSectionHeading from './navigation/SettingsSectionHeading';
 import MotionReductionSettingsSection from './MotionReductionSettingsSection';
+import AndroidUpdateSection from './AndroidUpdateSection';
 import SettingsRow, { SettingsToggle } from './SettingsRow';
 import { settingsDividerClassFor } from './settingsCardClasses';
 import { useThemeSettingsStore } from '../../../stores/useThemeSettingsStore';
@@ -270,6 +272,17 @@ const GraphicsSettingsSubview: React.FC<GraphicsSettingsSubviewProps> = ({
                     theme={theme}
                 />
             </SettingsAnchor>
+
+            {IS_ANDROID_WEBVIEW && (
+                <SettingsAnchor anchorId="graphicsAppUpdate" label="关于与更新" className="space-y-4">
+                    <SettingsSectionHeading icon={Download} label="关于与更新" />
+                    <AndroidUpdateSection
+                        settingsCardClass={settingsCardClass}
+                        dividerClass={dividerClass}
+                        utilityGhostButtonClass={utilityGhostButtonClass}
+                    />
+                </SettingsAnchor>
+            )}
 
             <ThemedDialog
                 isOpen={isNativeBlurNoticeOpen}
