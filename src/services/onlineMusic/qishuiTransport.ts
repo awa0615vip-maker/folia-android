@@ -238,6 +238,36 @@ interface QrPending {
 
 const qrPending = new Map<string, QrPending>();
 
+// 最近 check_qrconnect 原始响应快照，供登录诊断报告输出（沙箱无法真实扫码，这是唯一能看到
+// 「手机确认后服务端到底返回了什么」的途径）。
+interface CheckSnapshot {
+    at: number;
+    status: unknown;
+    errorCode: unknown;
+    accountFlow: unknown;
+    description: unknown;
+    redirect: unknown;
+    cookieKeys: string[];
+    hasSession: boolean;
+}
+const checkHistory: CheckSnapshot[] = [];
+const CHECK_HISTORY_LIMIT = 10;
+function recordCheck(snapshot: CheckSnapshot): void {
+    checkHistory.push(snapshot);
+    if (checkHistory.length > CHECK_HISTORY_LIMIT) checkHistory.shift();
+}
+/** 诊断报告的 qishui details：逐次列出 check_qrconnect 的真实 status/redirect/cookie 状态。 */
+export function getQrCheckDiagnosticLines(): string[] {
+    if (!checkHistory.length) return ['(no check_qrconnect response recorded)'];
+    return checkHistory.map((s, i) => {
+        const t = new Date(s.at).toISOString().slice(11, 23);
+        const redir = s.redirect ? ` redirect="${String(s.redirect).slice(0, 140)}"` : '';
+        const desc = s.description ? ` desc="${String(s.description).slice(0, 140)}"` : '';
+        return `#${i} ${t} status=${JSON.stringify(s.status)} code=${s.errorCode}`
+            + ` flow=${s.accountFlow ?? '-'} hasSession=${s.hasSession} cookieKeys=[${s.cookieKeys.join(',')}]${redir}${desc}`;
+    });
+}
+
 export interface QishuiQrCreate {
     token: string;
     /** 可直接放进 <img src> 的二维码图片地址（URL 或 data: URL）。 */
@@ -330,6 +360,40 @@ export async function pollQrLogin(token: string): Promise<QishuiQrState> {
         return { state: 'confirmed' };
     }
 
+    // 无论 status 文本是 confirmed/success/done 还是别的，只要服务端给了 redirect_url，
+    // session cookie 就挂在它的响应（含重定向中间跳）。原生桥已会沿重定向链收集每一跳 Set-Cookie，
+    // 主动 GET redirect_url 收割。
+    const redirect = String(data.redirect_url ?? data.redirect ?? '').trim();
+    if (redirect.startsWith('http')) {
+        try {
+            await qishuiFetch(redirect, {
+                extraHeaders: passportHeaders(cookieHeaderFromMap(nextJar)),
+                cookieOverride: nextJar,
+                timeoutMs: 20_000,
+            });
+            const redirJar = mergeCookieMaps(nextJar, loadCookieMap());
+            pending.cookies = redirJar;
+            saveCookieMap(redirJar);
+            if (hasLoginSession(redirJar)) {
+                qrPending.delete(token);
+                return { state: 'confirmed' };
+            }
+        } catch {
+            /* redirect 收割失败：继续按 status 分支处理 */
+        }
+    }
+
+    recordCheck({
+        at: Date.now(),
+        status: data.status,
+        errorCode: data.error_code ?? payload.error_code,
+        accountFlow: data.account_flow,
+        description: data.description ?? payload.description ?? payload.message,
+        redirect: data.redirect_url ?? data.redirect,
+        cookieKeys: Object.keys(pending.cookies),
+        hasSession: hasLoginSession(pending.cookies),
+    });
+
     const rawStatus = String(data.status ?? '').toLowerCase();
     const errorCode = Number(data.error_code ?? payload.error_code ?? 0);
     const accountFlow = String(data.account_flow ?? '').toLowerCase();
@@ -348,6 +412,7 @@ export async function pollQrLogin(token: string): Promise<QishuiQrState> {
     }
     if (rawStatus.includes('confirm')) {
         pending.phoneConfirmed = true;
+        // redirect_url 已在上面统一收割；若仍未拿到 session，短暂退避后继续轮询，不失败。
         pending.backoffUntil = Date.now() + 2500;
         return { state: 'scanned', message: '手机已确认，正在等待下发登录态…' };
     }

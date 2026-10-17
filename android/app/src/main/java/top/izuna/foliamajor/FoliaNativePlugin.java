@@ -613,10 +613,24 @@ public class FoliaNativePlugin extends Plugin {
                 // Preserve repeated headers (Set-Cookie) by handing JS an array
                 // instead of an object, which would collapse duplicates.
                 JSArray responseHeaders = new JSArray();
+                // Non-cookie headers come from the final response only.
                 for (String name : response.headers().names()) {
+                    if (name.equalsIgnoreCase("set-cookie")) continue; // collected along the whole chain below
                     for (String value : response.headers().values(name)) {
                         JSObject headerEntry = new JSObject();
                         headerEntry.put("name", name);
+                        headerEntry.put("value", value);
+                        responseHeaders.put(headerEntry);
+                    }
+                }
+                // OkHttp follows redirects automatically and only surfaces the final response,
+                // dropping the Set-Cookie headers attached to intermediate 302 hops. The QR
+                // redirect_url puts the session cookies precisely on those hops, so walk the
+                // priorResponse chain to collect every Set-Cookie.
+                for (Response hop = response; hop != null; hop = hop.priorResponse()) {
+                    for (String value : hop.headers().values("Set-Cookie")) {
+                        JSObject headerEntry = new JSObject();
+                        headerEntry.put("name", "set-cookie");
                         headerEntry.put("value", value);
                         responseHeaders.put(headerEntry);
                     }

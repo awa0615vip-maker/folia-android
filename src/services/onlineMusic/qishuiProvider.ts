@@ -10,6 +10,7 @@ import {
     fetchTrackPlayInfo,
     getProfile,
     getQishuiTransportAvailability,
+    getQrCheckDiagnosticLines,
     pollQrLogin,
     resultGroup,
     searchAll,
@@ -167,5 +168,8 @@ export const qishuiProvider: OnlineMusicProvider = {
             cancelQrLogin(key);
         },
         getQrTtlMs: () => 5 * 60 * 1000,
+        async getQrLoginDiagnostics() {
+            return getQrCheckDiagnosticLines();
+        },
     },
 };
