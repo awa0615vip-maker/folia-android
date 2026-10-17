@@ -13,6 +13,25 @@ import { settingsDividerClassFor } from './settingsCardClasses';
 import { useThemeSettingsStore } from '../../../stores/useThemeSettingsStore';
 import { usePlayerChromeSettingsStore } from '../../../stores/usePlayerChromeSettingsStore';
 import { useVisualizerSettingsStore } from '../../../stores/useVisualizerSettingsStore';
+import {
+    resolveEffectiveTier,
+    usePerformanceTierStore,
+    type PerformanceModePreference,
+} from '../../../stores/usePerformanceTierStore';
+
+// 性能模式分段选项（自动跟随硬件 / 手动强制三档）。
+const PERF_MODE_OPTIONS: ReadonlyArray<{ value: PerformanceModePreference; label: string }> = [
+    { value: 'auto', label: '自动' },
+    { value: 'high', label: '高画质' },
+    { value: 'balanced', label: '均衡' },
+    { value: 'low', label: '省电' },
+];
+
+const TIER_LABELS: Record<string, string> = {
+    high: '高画质',
+    balanced: '均衡',
+    low: '省电',
+};
 
 // src/components/modal/settings/GraphicsSettingsSubview.tsx
 // Everything that trades picture for smoothness or works around a renderer problem: static mode,
@@ -68,6 +87,22 @@ const GraphicsSettingsSubview: React.FC<GraphicsSettingsSubviewProps> = ({
     const glowBlurQuantize = useVisualizerSettingsStore(state => state.glowBlurQuantize);
     const onToggleGlowBlurQuantize = useVisualizerSettingsStore(state => state.handleToggleGlowBlurQuantize);
 
+    // 自适应性能引擎：性能模式（自动/高画质/均衡/省电）与检测到的设备信息。
+    const perfMode = usePerformanceTierStore(state => state.mode);
+    const setPerfMode = usePerformanceTierStore(state => state.setPerformanceMode);
+    const deviceCapabilities = usePerformanceTierStore(state => state.capabilities);
+    const effectiveTier = usePerformanceTierStore(state => resolveEffectiveTier(state));
+    const deviceInfo = (() => {
+        const sig = deviceCapabilities.signals;
+        const mem = sig.deviceMemoryGb !== null ? `内存 ${sig.deviceMemoryGb}GB` : null;
+        const cores = sig.hardwareConcurrency !== null ? `${sig.hardwareConcurrency} 核 CPU` : null;
+        const gpu = sig.gpuRenderer ? `GPU ${sig.gpuRenderer}` : null;
+        const screen = sig.screenWidth > 0
+            ? `${sig.screenWidth}×${sig.screenHeight} @${sig.devicePixelRatio}x`
+            : null;
+        return [mem, cores, screen, gpu].filter(Boolean).join(' · ');
+    })();
+
     const dividerClass = settingsDividerClassFor(isDaylight);
     const isLinux = typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('linux');
     const isVisualizerFrameRateLimiterEnabled = visualizerFrameRate !== 'off';
@@ -101,6 +136,51 @@ const GraphicsSettingsSubview: React.FC<GraphicsSettingsSubviewProps> = ({
         <div className="space-y-5">
             <SettingsAnchor anchorId="graphicsPerformance" label={t('options.labPerformanceSection')} className="space-y-4">
                 <SettingsSectionHeading icon={MonitorCog} label={t('options.labPerformanceSection')} />
+                <div className={`rounded-xl border overflow-hidden ${settingsCardClass}`}>
+                    <SettingsRow
+                        title="性能模式"
+                        description={perfMode === 'auto'
+                            ? `自动识别设备配置并调整渲染、特效与帧率，当前判定为「${TIER_LABELS[effectiveTier]}」`
+                            : '手动指定性能档位，将覆盖自动识别'}
+                        dividerClass={dividerClass}
+                    >
+                        <div className="space-y-3">
+                            <div className="grid grid-cols-4 gap-1.5">
+                                {PERF_MODE_OPTIONS.map(option => {
+                                    const selected = perfMode === option.value;
+                                    return (
+                                        <button
+                                            key={option.value}
+                                            type="button"
+                                            onClick={() => setPerfMode(option.value)}
+                                            className="rounded-lg border px-2 py-2 text-xs font-medium transition-colors"
+                                            style={selected
+                                                ? {
+                                                    backgroundColor: theme?.accentColor || '#3b82f6',
+                                                    borderColor: theme?.accentColor || '#3b82f6',
+                                                    color: '#fff',
+                                                }
+                                                : {
+                                                    borderColor: 'var(--border-color, rgba(255,255,255,0.12))',
+                                                    color: 'var(--text-secondary)',
+                                                }}
+                                        >
+                                            {option.label}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            {deviceInfo && (
+                                <div className="text-[11px] leading-5 opacity-60 break-words" style={{ color: 'var(--text-secondary)' }}>
+                                    检测到：{deviceInfo}
+                                </div>
+                            )}
+                            <div className="text-[11px] leading-5 opacity-50" style={{ color: 'var(--text-secondary)' }}>
+                                省电档会回收离屏卡片、关闭毛玻璃与重阴影、可视化器转静态并锁 30 帧；均衡档保持外观、降低渲染量；高画质满血。
+                            </div>
+                        </div>
+                    </SettingsRow>
+                </div>
                 <div className={`rounded-xl border overflow-hidden ${settingsCardClass}`}>
                     <SettingsRow
                         title={t('options.enableStaticMode')}

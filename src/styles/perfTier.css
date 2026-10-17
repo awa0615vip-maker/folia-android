@@ -1,0 +1,42 @@
+/* src/styles/perfTier.css
+ * 自适应性能引擎的 CSS 降级层（配合 <html data-perf-tier>）。
+ *
+ * 只在 low（省电）档做全局视觉降级；high/balanced 保持外观不变，它们只靠帧率、渲染量、
+ * DPR 等 JS 侧参数减负。
+ *
+ * 墙面（lattice / bravais）的重特效降级由根节点的 `.is-performance` 类承担（见 wall.css），
+ * 本文件补的是墙面之外、且在播放/滑动时常驻的合成开销：毛玻璃、循环装饰动画、大面积阴影。
+ * 任何降级都不删内容、不改布局，只降低华丽度。
+ */
+
+/* 1) 毛玻璃（backdrop-filter）是安卓 WebView 上最贵的合成之一：它要先把背后画面拷出来，
+ *      且每个面板/缝各算一遍。低端统一关掉，改用半透明纯色。 */
+:root[data-perf-tier='low'] *,
+:root[data-perf-tier='low'] *::before,
+:root[data-perf-tier='low'] *::after {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+}
+
+/* 关掉模糊后，给常驻/常用的浮层与菜单加深底色，避免背后内容透出导致文字看不清。 */
+:root[data-perf-tier='low'] .lattice-tools-island,
+:root[data-perf-tier='low'] .lattice-tools-panel,
+:root[data-perf-tier='low'] .lattice-back,
+:root[data-perf-tier='low'] .bravais-focus-menu,
+:root[data-perf-tier='low'] .bravais-seam-tab {
+    background-color: rgb(10 10 13 / 0.94);
+}
+
+/* 2) 关掉持续循环的装饰性呼吸/光晕动画（loading 占位、远程进度辉光、提示箭头）。
+ *      这些不承载信息，低端省掉持续的重绘。 */
+:root[data-perf-tier='low'] .remote-progress-transition-glow,
+:root[data-perf-tier='low'] .ponder-next-cue-arrow,
+:root[data-perf-tier='low'] .bravais-root.is-loading .lattice-poster.bravais-tile-face.is-wall {
+    animation: none !important;
+}
+
+/* 3) 弹层 / 工作区的大面积、多层投影在低端收薄（只保留一层浅影维持层次），不影响布局。 */
+:root[data-perf-tier='low'] .lattice-tools-island,
+:root[data-perf-tier='low'] .lattice-tools-panel {
+    box-shadow: 0 6px 18px rgb(0 0 0 / 0.35);
+}

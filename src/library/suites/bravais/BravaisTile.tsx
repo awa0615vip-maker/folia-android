@@ -23,6 +23,7 @@ import { resolveBravaisTileForm } from './bravaisTileForm';
 import './bravaisTileKinds.css';
 import { getWaveStagger, WALL_WAVE_IN_MS, WALL_WAVE_LIFT, WALL_WAVE_OUT_MS } from './bravaisWallWave';
 import { useLatticeSettingsStore } from '../../../stores/useLatticeSettingsStore';
+import { resolveEffectiveTier, usePerformanceTierStore } from '../../../stores/usePerformanceTierStore';
 
 // src/library/suites/bravais/BravaisTile.tsx
 // 墙上的一张磁贴。分两层（给 B6b③ 的底板留结构）：外框（.bravais-tile）只管位置与尺寸，永远不转；内容层
@@ -276,7 +277,9 @@ function BravaisTile({
     // 透着的磁贴不画封面（2026-10-09 起连封面底条也不画），不取图；聚焦卡与普通磁贴按自己的尺寸取图。
     // 性能优先：封面按世界尺寸封顶（档位 256 / 512，再往上才是 1024 与原图），高 DPR 屏上不再取大一档的图。
     // 聚焦卡（展开的那张）不压：它是此刻的主角，糊了比多解一张图更碍眼。
-    const performanceMode = useLatticeSettingsStore(state => state.latticePerformanceMode);
+    const manualPerformanceMode = useLatticeSettingsStore(state => state.latticePerformanceMode);
+    const effectiveTier = usePerformanceTierStore(state => resolveEffectiveTier(state));
+    const performanceMode = manualPerformanceMode || effectiveTier === 'low';
     const lightsOn = useLatticeSettingsStore(state => state.latticeLightsOn);
     const coverTargetPx = Math.max(rect.width, rect.height) * pixelScale;
     const coverUrl = useWallPosterArtwork(

@@ -10,6 +10,7 @@ import WallBackButton from '../../wall/WallBackButton';
 import { buildLatticeTiles, type LatticeTile } from './latticeModel';
 import { useStableCallbacks } from '../../../hooks/useStableCallbacks';
 import { useLatticeSettingsStore } from '../../../stores/useLatticeSettingsStore';
+import { resolveEffectiveTier, usePerformanceTierStore } from '../../../stores/usePerformanceTierStore';
 import { countRender } from '../../../dev/renderCount';
 import '../../wall/wall.css';
 import './Lattice.css';
@@ -66,7 +67,11 @@ export default function Lattice({
 }: LatticeProps) {
     countRender('Lattice');
     const { t } = useTranslation();
-    const performanceMode = useLatticeSettingsStore(state => state.latticePerformanceMode);
+    const manualPerformanceMode = useLatticeSettingsStore(state => state.latticePerformanceMode);
+    // 低端省电档自动启用整套墙面性能降级（is-performance：噪点/暗角/光晕/每卡阴影与滤镜），
+    // 等价于自动打开「性能优先」；手动开关仍可在其它档位强制开启。
+    const effectiveTier = usePerformanceTierStore(state => resolveEffectiveTier(state));
+    const performanceMode = manualPerformanceMode || effectiveTier === 'low';
     const vignette = useLatticeSettingsStore(state => state.latticeVignette);
     const lightsOn = useLatticeSettingsStore(state => state.latticeLightsOn);
     const posterTintEnabled = useLatticeSettingsStore(state => state.latticePosterTintEnabled);

@@ -1,5 +1,10 @@
 import { Buffer } from 'buffer';
-import { installGlobalVisualizerFrameRateLimiter } from './utils/frameRateLimiter';
+import {
+    installGlobalVisualizerFrameRateLimiter,
+    VISUALIZER_FRAME_RATE_STORAGE_KEY,
+} from './utils/frameRateLimiter';
+import { readPerformanceProfile } from './stores/usePerformanceTierStore';
+import { IS_ANDROID_WEBVIEW } from './utils/platform';
 import { installConsoleLogCapture } from './utils/consoleLogBuffer';
 import { installCrashDiagnostics } from './utils/crashDiagnostics';
 import { installDebugModule } from './services/debug/debugModule';
@@ -28,10 +33,29 @@ installFrameTimingDiagnostics();
 // only even then: a packaged build has nothing to do with the answer, so it should not pay the
 // observer or the rows it retains.
 // if (import.meta.env.DEV) installCoverSizeAudit();
-installGlobalVisualizerFrameRateLimiter();
+// 全局帧率门：用户在图形设置里手动选过就永远听用户；否则安卓按设备档位给默认（高端 60、
+// 中低端 30），桌面保持原行为不限制。
+const userSetFrameRate = typeof window !== 'undefined'
+    && window.localStorage.getItem(VISUALIZER_FRAME_RATE_STORAGE_KEY) !== null;
+if (IS_ANDROID_WEBVIEW && !userSetFrameRate) {
+    installGlobalVisualizerFrameRateLimiter(readPerformanceProfile().render.visualizerFrameRate);
+} else {
+    installGlobalVisualizerFrameRateLimiter();
+}
 installAndroidPhoneFitPreference();
 // 屏幕常亮：启动时套用保存的开关状态（安卓走原生窗口标志）。
 installKeepScreenOnPreference();
 void installNativeAndroidBridge();
+
+// 低端省电档且用户从未手动选过可视化器时，预设为官方静态低资源模式（still）。
+// 必须在动态 import('./bootstrap') 之前写入 localStorage —— 可视化器 store 首次读取就会拿到它；
+// 用户一旦手动选过任意模式，这里就不再介入。
+if (typeof window !== 'undefined' && IS_ANDROID_WEBVIEW
+    && window.localStorage.getItem('visualizer_mode') === null) {
+    const fallbackVisualizer = readPerformanceProfile().visualizer.autoFallbackMode;
+    if (fallbackVisualizer) {
+        window.localStorage.setItem('visualizer_mode', fallbackVisualizer);
+    }
+}
 
 void import('./bootstrap');

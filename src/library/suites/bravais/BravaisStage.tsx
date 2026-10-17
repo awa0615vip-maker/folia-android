@@ -5,6 +5,7 @@ import { FLIP_MAX_TILES } from '../../../components/wall/flipPlan';
 import { useDevicePixelRatio } from '../../../hooks/useMediaQuery';
 import { useReducedMotionFor } from '../../../hooks/useReducedMotionFor';
 import { useLatticeSettingsStore } from '../../../stores/useLatticeSettingsStore';
+import { resolveEffectiveTier, usePerformanceTierStore } from '../../../stores/usePerformanceTierStore';
 import { useLibraryWallLookStore } from '../../../stores/useLibraryWallLookStore';
 import type { LibrarySuiteStageProps } from '../../core/contracts/suite';
 import { BRAVAIS_METRICS, BRAVAIS_OVERSCAN, BRAVAIS_SEAM_ACRYLIC_BLUR } from './bravaisConstants';
@@ -133,7 +134,10 @@ const BravaisStage: React.FC<LibrarySuiteStageProps> = ({
     // B11：换层的翻牌 / 波次按「降低动态效果」降级成淡入淡出（lattice 或 collectionMorph，见 bravaisMotion）。
     const reducedTransitions = useBravaisReducedTransitions();
     const devicePixelRatio = useDevicePixelRatio();
-    const performanceMode = useLatticeSettingsStore(state => state.latticePerformanceMode);
+    const manualPerformanceMode = useLatticeSettingsStore(state => state.latticePerformanceMode);
+    // 低端省电档自动启用墙面性能降级（与 Lattice 海报墙一致）。
+    const effectiveTier = usePerformanceTierStore(state => resolveEffectiveTier(state));
+    const performanceMode = manualPerformanceMode || effectiveTier === 'low';
     const vignette = useLatticeSettingsStore(state => state.latticeVignette);
     const lightsOn = useLatticeSettingsStore(state => state.latticeLightsOn);
     const tintEnabled = useLatticeSettingsStore(state => state.latticePosterTintEnabled);

@@ -212,6 +212,7 @@ export const layoutLattice = (
     bounds: Bounds,
     overscan: number,
     metrics: WallMetrics,
+    maxInstances: number = MAX_RENDERED_INSTANCES,
 ): QueueInstance[] => {
     if (totalEntries <= 0 || geometry.blockWidth <= 0 || geometry.blockHeight <= 0) return [];
 
@@ -233,7 +234,7 @@ export const layoutLattice = (
                 const instance = buildInstance(geometry, totalEntries, column, row, slotIndex, metrics);
                 if (!overlaps(toBounds(instance), view)) continue;
                 result.push(instance);
-                if (result.length >= MAX_RENDERED_INSTANCES) return result;
+                if (result.length >= maxInstances) return result;
             }
         }
     }

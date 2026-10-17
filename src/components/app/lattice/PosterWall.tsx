@@ -31,6 +31,8 @@ import { resolveWallHandoffRole, useWallHandoffStore } from '../../../stores/use
 import { useLatticeWallHandoff } from './useLatticeWallHandoff';
 import { wallFirstScreenStarted, notifyWallFirstScreenReady } from '../../../utils/wallFirstScreenGate';
 import { IS_ANDROID_WEBVIEW } from '../../../utils/platform';
+import { resolveEffectiveTier, usePerformanceTierStore } from '../../../stores/usePerformanceTierStore';
+import { getPerformanceProfile } from '../../../utils/performanceProfile';
 
 // Draggable poster field: one greedily packed block template repeats over the queue.
 // 翻牌交接（设计稿 §7「进入队列」）：从资料库墙进来时不跑自己的入场波次，海报侧立着等资料库墙翻出、再按到起点的距离翻进；
@@ -106,19 +108,30 @@ export default function PosterWall({
     const entranceSuppressed = useWallHandoffStore(state => resolveWallHandoffRole(state.session, 'lattice') === 'in');
     const autoFocusOnSongChange = useLatticeSettingsStore(state => state.autoFocusOnSongChange);
     const performanceMode = useLatticeSettingsStore(state => state.latticePerformanceMode);
-    const devicePixelRatio = useDevicePixelRatio();
-    // 性能优先：封面按世界尺寸取档（而不是设备像素），高 DPR 屏上不再为每张卡解一张大一档的图。
-    const pixelScale = performanceMode
-        ? Math.min(cameraScale * devicePixelRatio, 1)
-        : cameraScale * devicePixelRatio;
+    // 自适应性能引擎：auto 时由硬件探测决定档位，手动选择则覆盖。所有渲染参数都从参数表取。
+    const effectiveTier = usePerformanceTierStore(state => resolveEffectiveTier(state));
+    const perfProfile = getPerformanceProfile(effectiveTier);
+    // 用 ref 把档位参数交给命令式相机回调，避免档位没变就因 profile 重建一串 useCallback。
+    const wallProfileRef = useRef(perfProfile.wall);
+    wallProfileRef.current = perfProfile.wall;
+    const devicePixelRatioRaw = useDevicePixelRatio();
+    // 高 DPR 屏按档位钳制：低端机不按物理像素绘满，直接砍掉 GPU 填充量。
+    const devicePixelRatio = Math.min(devicePixelRatioRaw, perfProfile.render.maxPixelRatio);
+    // 性能优先（手动开关）或档位要求时，相机行程有限化；封面采样按档位取上限（低端 0.75，均衡 1）。
+    const finiteCamera = performanceMode || perfProfile.wall.finiteCamera;
+    const coverPixelScaleCap = performanceMode
+        ? Math.min(perfProfile.render.coverPixelScaleCap, 1)
+        : perfProfile.render.coverPixelScaleCap;
+    const pixelScale = Math.min(cameraScale * devicePixelRatio, coverPixelScaleCap);
     // 相机行程（见 clampFiniteCamera）与裁剪余量都跟着收窄：性能优先时不再无限铺下去。
-    const reservedViewports = performanceMode ? 1 : MAX_RESERVED_VIEWPORTS;
+    const reservedViewports = finiteCamera ? perfProfile.wall.reservedViewports : MAX_RESERVED_VIEWPORTS;
 
     const geometry = useMemo(() => getLatticeGeometry(tiles.length, METRICS), [tiles.length]);
-    // 每次只渲染约 1.7 倍屏幕大小的区域（四周各留 0.35 屏）。滑过的区域由 bounds 累积永久保留，
-    // 卡片挂载后不再卸载；首屏只挂这一小片，进墙快，随滑动逐片补渲染。
+    // 每次只渲染约 (1+2*factor) 倍屏幕大小的区域：高端 0.35（1.7 倍）、均衡 0.22、低端 0.12。
+    // 高端/均衡滑过的区域由 bounds 累积永久保留；低端档为有界滑动窗口，远处卡片会回收（见 applyCamera）。
     const overscan = measured
-        ? Math.max(viewportRef.current.width / cameraScale, viewportRef.current.height / cameraScale) * 0.35
+        ? Math.max(viewportRef.current.width / cameraScale, viewportRef.current.height / cameraScale)
+            * perfProfile.wall.overscanFactor
         : OVERSCAN;
     const [activePoster, setActivePoster] = useLatticePosterSelection(tiles, geometry, METRICS);
 
@@ -154,9 +167,35 @@ export default function PosterWall({
         publishCurrentPosterVisibility(next);
         if (!updateBounds || frameRef.current !== null) return;
         frameRef.current = requestAnimationFrame(() => {
-            // 渲染区域只增不减：把新视口并进已渲染区域，滑过的卡片永久保留、不再卸载重渲染。
             setBounds(prev => {
                 const next = getWorldBounds(cameraRef.current, viewportRef.current);
+                const wall = wallProfileRef.current;
+                if (wall.recycleOffscreen) {
+                    // 低端档「有界滑动窗口」：bounds 各边外扩 recycleWindowFactor-overscanFactor，
+                    // 交给 layoutLattice 再外扩 overscanFactor，合计在视口四周各留 recycleWindowFactor
+                    // （0.3）屏、常驻约 1.6 倍视口。滑出窗口的卡片卸载，内存被钉死、不再越逛越大。
+                    const scale = cameraRef.current.scale;
+                    const margin = Math.max(viewportRef.current.width, viewportRef.current.height)
+                        / scale * Math.max(0, wall.recycleWindowFactor - wall.overscanFactor);
+                    const windowBounds = {
+                        left: next.left - margin,
+                        right: next.right + margin,
+                        top: next.top - margin,
+                        bottom: next.bottom + margin,
+                    };
+                    const prevCoversNext = next.left >= prev.left && next.right <= prev.right
+                        && next.top >= prev.top && next.bottom <= prev.bottom;
+                    // 视口还在已渲染区域内、且已渲染区域没有比窗口大太多时，继续累积（减少卸载抖动）；
+                    // 一旦离开或区域过大，就以当前视口为中心重建窗口，远处卡片随之回收。
+                    if (prevCoversNext) {
+                        const prevArea = (prev.right - prev.left) * (prev.bottom - prev.top);
+                        const windowArea = (windowBounds.right - windowBounds.left)
+                            * (windowBounds.bottom - windowBounds.top);
+                        if (prevArea <= windowArea * 1.4) return prev;
+                    }
+                    return windowBounds;
+                }
+                // 高/均衡档：渲染区域只增不减，把新视口并进已渲染区域，滑过的卡片永久保留、不再卸载。
                 if (next.left >= prev.left && next.right <= prev.right
                     && next.top >= prev.top && next.bottom <= prev.bottom) return prev;
                 return {
@@ -219,7 +258,7 @@ export default function PosterWall({
      * 框会把当前视口并进去一起放宽，所以下一次拖动不会被拽回来。
      */
     const clampFiniteCamera = useCallback((camera: LatticeCamera): LatticeCamera => {
-        if (!performanceMode) return camera;
+        if (!finiteCamera) return camera;
         const viewport = viewportRef.current;
         const marginX = viewport.width / camera.scale;
         const marginY = viewport.height / camera.scale;
@@ -239,7 +278,7 @@ export default function PosterWall({
             x: minX > maxX ? camera.x : Math.min(maxX, Math.max(minX, camera.x)),
             y: minY > maxY ? camera.y : Math.min(maxY, Math.max(minY, camera.y)),
         };
-    }, [geometry.cellHeight, geometry.cellWidth, performanceMode]);
+    }, [geometry.cellHeight, geometry.cellWidth, finiteCamera]);
 
     const { panTo, stopPan, animationRef } = useWallCameraPan({ cameraRef, viewportRef, reducedMotion, applyCamera, reserveBounds });
 
@@ -281,12 +320,19 @@ export default function PosterWall({
 
     const instances = useMemo(() => {
         if (!measured) return [];
-        const visible = layoutLattice(geometry, tiles.length, bounds, overscan, METRICS);
+        const visible = layoutLattice(
+            geometry,
+            tiles.length,
+            bounds,
+            overscan,
+            METRICS,
+            perfProfile.wall.maxRenderedInstances,
+        );
         if (!activePoster || visible.some(instance => instance.instanceId === activePoster.instance.instanceId)) {
             return visible;
         }
         return [...visible, activePoster.instance];
-    }, [activePoster, bounds, geometry, measured, overscan, tiles.length]);
+    }, [activePoster, bounds, geometry, measured, overscan, perfProfile.wall.maxRenderedInstances, tiles.length]);
 
     // Only changes when the mounted instance set changes, not on every camera frame.
     const renderedInstanceIds = useMemo(
@@ -304,7 +350,8 @@ export default function PosterWall({
             return;
         }
         const start = performance.now();
-        const INNER_LIMIT_MS = 4800;
+        // 启动门等待上限按档位：低端 3.2s 早进（避免低端机被遮罩卡更久），高端 6s 等首屏完整。
+        const INNER_LIMIT_MS = perfProfile.splash.maxWaitMs;
         let cancelled = false;
         let timer = 0;
         const probes = new Map<string, HTMLImageElement>();

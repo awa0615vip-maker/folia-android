@@ -2,6 +2,7 @@ import React from 'react';
 import { hideAppSplash } from '../utils/appSplash';
 import { IS_ANDROID_WEBVIEW } from '../utils/platform';
 import { waitForWallFirstScreen } from '../utils/wallFirstScreenGate';
+import { readPerformanceProfile } from '../stores/usePerformanceTierStore';
 
 // src/components/AppSplashGate.tsx
 // 包在根组件树外层：首帧挂载完成后（useEffect 在浏览器绘制之后触发）移除首屏加载遮罩，
@@ -15,8 +16,8 @@ const PREWARM_MIN_MS = 900;    // 遮罩至少停留，与原生启动画面时�
 const SW_READY_TIMEOUT_MS = 1000;
 // 海报墙首屏门：这段时间内墙没开始渲染就视为本次启动不在墙页面（直接放行，不白等）；
 // 墙开始了就等它把首屏卡片挂好、封面解码完，到总上限为止，保证不会卡在启动页。
+// 总上限（WALL_MAX_MS）按设备档位从 performanceProfile 取，见下方 effect。
 const WALL_DETECT_MS = 1500;
-const WALL_MAX_MS = 6000;
 
 const wait = (ms: number): Promise<void> => new Promise(resolve => {
     window.setTimeout(resolve, ms);
@@ -56,12 +57,15 @@ const AppSplashGate: React.FC<{ children: React.ReactNode }> = ({ children }) =>
         }
 
         let cancelled = false;
+        // 启动门总等待上限按设备档位：低端省电档早进（3.2s，避免弱机被启动遮罩卡更久），
+        // 高端满血等到 6s 让首屏完整。
+        const wallMaxMs = readPerformanceProfile().splash.maxWaitMs;
         // children 在遮罩下挂载：等封面 SW 就绪 + 海报墙首屏卡片挂载、封面解码完成（墙在页面时）。
         // 墙没在页面（检测窗口内未开始）或到总上限都会放行，绝不卡死。
         void Promise.all([
             wait(PREWARM_MIN_MS),
             waitForCoverWorker(),
-            waitForWallFirstScreen(WALL_DETECT_MS, WALL_MAX_MS),
+            waitForWallFirstScreen(WALL_DETECT_MS, wallMaxMs),
         ]).then(() => {
             if (!cancelled) hideAppSplash();
         });

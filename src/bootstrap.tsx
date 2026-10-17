@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import './i18n/config';
 import './index.css';
 import './styles/androidPhoneFit.css';
+import './styles/perfTier.css';
 import App from './App';
 import AppSplashGate from './components/AppSplashGate';
 import RemoteControlApp from './components/remote/RemoteControlApp';
@@ -24,6 +25,9 @@ import { isMainAppSurface, isObsBrowserSourceSurface, isRemoteControlSurface, ob
 // 副作用 import：store 在模块加载时就把 `<html data-reduce-motion>` 写好并保持同步。放在 bootstrap
 // 而不是 App 里，是因为下面按 URL 挂的根不止 App —— 远程控制窗口的进度辉光也读这个属性。
 import './stores/useMotionSettingsStore';
+// 同理：自适应性能引擎在模块加载时探测硬件并把 `<html data-perf-tier>` 写好，第一帧即按档位渲染。
+import './stores/usePerformanceTierStore';
+import { installPerformanceRuntime } from './utils/performanceRuntime';
 
 // src/bootstrap.tsx
 // Mounts the React app after index.tsx installs runtime-level browser shims.
@@ -39,6 +43,8 @@ import './stores/useMotionSettingsStore';
 // here, for every surface this bundle mounts, rather than inside App so the remote-control and OBS
 // roots are covered too and App.tsx does not grow. See utils/nativeDragGuard.ts.
 installNativeDragGuard();
+// 自适应性能引擎：挂上档位切换时的运行时联动（帧率随档位等）。
+installPerformanceRuntime();
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
