@@ -11,6 +11,9 @@ import type { BravaisAccountForm } from './bravaisAccountModel';
 // 整页页面——模组的首页页面——盖住首页、整层 inert）表单看不见，surface 据此不让它接管键盘。
 
 /** 表单里的动作（surface 给，身份稳定；每个都直接调账户 controller，不 await 它的事务）。 */
+export type BravaisSmsSendOutcome = { ok: boolean; message: string; mobileTicket?: string; retryAfterSec?: number };
+export type BravaisSmsLoginOutcome = { ok: boolean; message: string };
+
 export type BravaisAccountActions = {
     selectMethod: (methodId: string) => void;
     retry: () => void;
@@ -19,6 +22,10 @@ export type BravaisAccountActions = {
     copyDiagnostics: () => Promise<{ report: string | null; copied: boolean }>;
     /** 打开 GitHub 反馈页（报告放得进链接时带上，否则只留粘贴提示）；Electron 里交给系统浏览器。 */
     openIssue: (providerId: OnlineProviderId, report: string | null) => void;
+    /** 汽水音乐：发送短信验证码（仅汽水登录表单用到）。 */
+    sendSms: (mobile: string) => Promise<BravaisSmsSendOutcome>;
+    /** 汽水音乐：用手机号 + 验证码登录（mobileTicket 为风控回传时带上）。 */
+    submitSms: (mobile: string, code: string, mobileTicket?: string) => Promise<BravaisSmsLoginOutcome>;
     close: () => void;
     confirm: (requestId: number) => void;
     cancel: (requestId: number) => void;

@@ -91,6 +91,8 @@ export type BravaisLoginForm = {
      * core 的 canShowLoginDiagnostics 决定，不按 provider 判断；后端没拉起来时也给）。
      */
     failureHelp: BravaisLoginFailureHelp | null;
+    /** 汽水音乐：仅手机号 + 短信验证码登录，二维码区整体换成短信表单（不显示扫码/选方式）。 */
+    sms: boolean;
     closeLabel: string;
 };
 
@@ -188,6 +190,7 @@ export const projectBravaisLoginForm = (view: LibraryLoginView, features: Bravai
             }
             : null,
         failureHelp: projectBravaisFailureHelp(view, features),
+        sms: session.providerId === 'qishui',
         closeLabel: view.closeLabel,
     };
 };

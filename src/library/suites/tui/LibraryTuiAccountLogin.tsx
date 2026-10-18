@@ -1,6 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import type { LibraryLoginView } from '../../core/bindings/useLibraryAccount';
+import QishuiSmsLoginForm from '../grid/account/QishuiSmsLoginForm';
 
 // src/library/suites/tui/LibraryTuiAccountLogin.tsx
 // TUI 的扫码登录框（只做展示）：等宽方框，标题嵌在上边框里；多方式时上面一排登录方式（↑↓ 移动高亮、Enter 选），
@@ -28,6 +29,10 @@ type LibraryTuiAccountLoginProps = {
     onRestart: () => void;
     onCopyDiagnostics: () => void;
     onClose: () => void;
+    /** 汽水音乐：发送短信验证码（仅汽水登录表单用到）。 */
+    onSendSms: (mobile: string) => Promise<{ ok: boolean; message: string; mobileTicket?: string; retryAfterSec?: number }>;
+    /** 汽水音乐：手机号 + 验证码登录。 */
+    onSmsLogin: (mobile: string, code: string, mobileTicket?: string) => Promise<{ ok: boolean; message: string }>;
 };
 
 const LibraryTuiAccountLogin: React.FC<LibraryTuiAccountLoginProps> = ({
@@ -44,9 +49,13 @@ const LibraryTuiAccountLogin: React.FC<LibraryTuiAccountLoginProps> = ({
     onRestart,
     onCopyDiagnostics,
     onClose,
+    onSendSms,
+    onSmsLogin,
 }) => {
     const { t } = useTranslation();
     const { session, methodStep, backendFailure } = view;
+    // 汽水音乐只保留手机号登录：整框换成短信表单，不画二维码 / 登录方式 / 诊断。
+    const isSms = session.providerId === 'qishui';
     const awaitingMethod = Boolean(methodStep) && session.selectedMethodId == null;
     const canRestart = showRestart && Boolean(backendFailure);
     const diagnostics = showDiagnostics && view.diagnosticsPrompt ? view.diagnosticsPrompt : null;
@@ -78,7 +87,7 @@ const LibraryTuiAccountLogin: React.FC<LibraryTuiAccountLoginProps> = ({
             style={{ borderColor: accentColor, backgroundColor: boxBackground, color: 'var(--text-primary)' }}
         >
             <h3 className="absolute -top-2.5 left-3 px-1 font-bold" style={{ color: accentColor, backgroundColor: boxBackground }}>
-                {view.title}
+                {isSms ? '手机号登录汽水音乐' : view.title}
             </h3>
             <button
                 type="button"
@@ -90,6 +99,12 @@ const LibraryTuiAccountLogin: React.FC<LibraryTuiAccountLoginProps> = ({
                 [x]
             </button>
 
+            {isSms ? (
+                <div className="w-full py-2">
+                    <QishuiSmsLoginForm onSendSms={onSendSms} onSmsLogin={onSmsLogin} onSuccess={onClose} />
+                </div>
+            ) : (
+                <>
             {methodStep && (
                 <div className="mb-3" data-tui-login-methods>
                     <p className="opacity-60">{methodStep.title}</p>
@@ -209,6 +224,8 @@ const LibraryTuiAccountLogin: React.FC<LibraryTuiAccountLoginProps> = ({
 
             <p className="mt-3 text-[11px] opacity-35">{view.note}</p>
             <p className="mt-1 text-[11px] opacity-50" data-tui-login-hints>{hints}</p>
+                </>
+            )}
         </section>
     );
 };

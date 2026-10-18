@@ -91,6 +91,8 @@ const LibraryTuiAccount: React.FC<LibraryAccountSurfaceProps> = ({ account, them
 
     const loginVisible = Boolean(login?.visible);
     const visible = loginVisible || Boolean(pendingSwitch);
+    // 汽水手机号登录表单要在输入框里打字，TUI 独占按键层会拦截单字符键，SMS 模式下整层停用（靠 [x] 关闭）。
+    const isQishuiSmsLogin = loginVisible && login?.session.providerId === 'qishui';
 
     const [focusedMethodRaw, setFocusedMethod] = useState<string | null>(null);
     const focusedMethod = resolveFocusedMethod(login, focusedMethodRaw);
@@ -149,7 +151,7 @@ const LibraryTuiAccount: React.FC<LibraryAccountSurfaceProps> = ({ account, them
     };
 
     useLibraryTuiAccountKeys({
-        isActive: visible && isInteractive,
+        isActive: visible && isInteractive && !isQishuiSmsLogin,
         containerRef,
         onKey: (key) => {
             if (pendingSwitch) {
@@ -216,6 +218,9 @@ const LibraryTuiAccount: React.FC<LibraryAccountSurfaceProps> = ({ account, them
                     onRestart={() => void account.restartLoginBackend()}
                     onCopyDiagnostics={() => void copyDiagnostics()}
                     onClose={() => void account.closeLogin()}
+                    onSendSms={mobile => account.sendSmsCode('qishui', mobile)}
+                    onSmsLogin={(mobile, code, mobileTicket) =>
+                        account.submitSmsLogin('qishui', mobile, code, mobileTicket)}
                 />
             ) : null}
             {pendingSwitch ? (

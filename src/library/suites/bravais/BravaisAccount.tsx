@@ -85,6 +85,10 @@ const BravaisAccount: React.FC<LibraryAccountSurfaceProps> = ({ account, isInter
             report: report ?? '',
             pasteHint: tRef.current('home.qrDiagnosticsPasteHint'),
         })),
+        // 汽水音乐：手机号 + 短信验证码登录（SMS 仅汽水提供，providerId 固定）。
+        sendSms: mobile => accountRef.current.sendSmsCode('qishui', mobile),
+        submitSms: (mobile, code, mobileTicket) =>
+            accountRef.current.submitSmsLogin('qishui', mobile, code, mobileTicket),
         close: () => void accountRef.current.closeLogin(),
         // 不 await：controller 同步清掉待确认请求，缝随之翻回；清理与刷新在后台走完。
         confirm: requestId => void accountRef.current.confirmSwitch(requestId),
@@ -103,7 +107,8 @@ const BravaisAccount: React.FC<LibraryAccountSurfaceProps> = ({ account, isInter
     useEffect(() => () => publishBravaisAccount(null, null, false), []);
 
     useExclusiveKeyLayer({
-        isActive: form !== null && interactive,
+        // 汽水手机号登录表单要在输入框里打字，独占层会拦截所有单字符键，SMS 模式下整层停用（靠右上角 X 关闭）。
+        isActive: form !== null && interactive && !(form.kind === 'login' && form.sms),
         containerRef: bravaisAccountElementRef,
         onKey: key => {
             if (!form) return false;

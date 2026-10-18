@@ -6,6 +6,7 @@ import { setBravaisAccountElement, useBravaisAccountStore, type BravaisAccountAc
 import type { BravaisAccountSeamVariant } from './bravaisSeamTarget';
 import BravaisLoginFailureHelpView from './BravaisLoginFailureHelp';
 import { BravaisSeamFlip, BravaisSeamFlipText } from './BravaisSeamFlip';
+import QishuiSmsLoginForm from '../grid/account/QishuiSmsLoginForm';
 import qqIcon from '../../../assets/providers/qq.svg';
 import wechatIcon from '../../../assets/providers/wechat.svg';
 import './bravaisAccount.css';
@@ -70,12 +71,18 @@ const LoginView: React.FC<{ form: BravaisLoginForm; actions: BravaisAccountActio
             data-bravais-login-phase={form.phase}
         >
             <div className="bravais-account-head">
-                <h2 className="bravais-form-title">{form.title}</h2>
+                <h2 className="bravais-form-title">{form.sms ? '手机号登录汽水音乐' : form.title}</h2>
                 <button type="button" className="bravais-seam-icon" data-bravais-form-action="close"
                     aria-label={form.closeLabel} title={form.closeLabel} onClick={actions.close}>
                     <X aria-hidden />
                 </button>
             </div>
+            {form.sms ? (
+                <div className="bravais-login-sms" style={{ alignSelf: 'center', width: '100%', maxWidth: 360 }}>
+                    <QishuiSmsLoginForm onSendSms={actions.sendSms} onSmsLogin={actions.submitSms} onSuccess={actions.close} />
+                </div>
+            ) : (
+                <>
             {methods && (
                 <div className="bravais-login-methods" data-bravais-login-methods>
                     <p className="is-label">{methods.title}</p>
@@ -134,6 +141,8 @@ const LoginView: React.FC<{ form: BravaisLoginForm; actions: BravaisAccountActio
                 <BravaisLoginFailureHelpView key={form.sessionId} help={form.failureHelp} providerId={form.providerId} actions={actions} />
             )}
             <p className="bravais-login-note">{form.note}</p>
+                </>
+            )}
         </section>
     );
 };
