@@ -1,16 +1,19 @@
 package top.izuna.foliamajor;
 
 import android.app.Activity;
+import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.Color;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.TypedValue;
 import android.view.Gravity;
-import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -19,16 +22,27 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Random;
 
 /**
- * 汽水音乐「内置网页登录」：
- * 在 App 内打开一个全屏 WebView，加载汽水官方可登录网页，用户用汽水 App 扫码 / 验证码登录。
- * 登录成功后，WebView 的 CookieManager 会在 .qishui.com 域写入会话 Cookie（含 HttpOnly 的
- * sessionid / sid_tt），本页轮询检测到后，把整段 Cookie 回传给 Web 层走 importCookie 导入。
+ * 汽水音乐「内置 PC 扫码登录」。
  *
- * 这样用户无需抓包、无需电脑、无需安装证书（WebView 是 App 内的正常浏览器环境，官方域名不风控）。
+ * 复刻汽水 PC 客户端（SodaMusic）官方登录页的完整流程：页面内是官方 WebInterfaceSdk，
+ * 用 aid=386088（luna_pc）调 passport 扫码，二维码内容是 PC 专用的 scan_login URL，并由官方
+ * sdk-glue 风控 SDK 完成设备指纹/签名，因此确认后拿到的会话是真正属于 luna_pc 的、
+ * 可以被 /luna/pc/me 接受的会话（而不是音乐人平台 bubble 那种 aid 不匹配的会话）。
+ *
+ * 官方登录页是为 Electron 写的（通过 window.transportPort 与主进程通信）。本类把它放进
+ * 独立原生 WebView（file:// 来源 + 放行跨域，等价 Electron 的 file 加载 + webSecurity 豁免），
+ * 并在页面内注入 transportPort shim（见 assets/qishui-login/login.html），其余扫码逻辑全部由
+ * 官方 JS 完成。登录成功后从 CookieManager 读取 .qishui.com 会话 Cookie 回传给 Web 层。
+ *
  * 仅用于登录本人账号，不做会员破解 / DRM 绕过。
  */
 public class QishuiLoginActivity extends Activity {
@@ -36,7 +50,13 @@ public class QishuiLoginActivity extends Activity {
     public static final String EXTRA_COOKIE = "cookie";
     public static final String EXTRA_FINAL_URL = "final_url";
     public static final String EXTRA_COOKIE_KEYS = "cookie_keys";
-    public static final String DEFAULT_URL = "https://bubble.qishui.com/login";
+    // 官方 PC 登录页（内置 assets）；如需临时改回外部网页可传 EXTRA_URL。
+    public static final String LOCAL_LOGIN_BASE = "file:///android_asset/qishui-login/login.html";
+    public static final String LOGIN_ASSET = "qishui-login/login.html";
+    // 桌面 Chrome UA：让官方页面 / 风控把设备当作 PC 端浏览器（与 SodaMusic 一致）。
+    private static final String DESKTOP_UA =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                    + "Chrome/131.0.0.0 Safari/537.36";
 
     // 与前端 qishuiConstants.SESSION_COOKIE_KEYS 保持一致，命中任意一个即视为已登录。
     private static final String[] SESSION_KEYS = {
@@ -45,8 +65,9 @@ public class QishuiLoginActivity extends Activity {
     // 依次读取这些 URL 可见的 Cookie，覆盖父域 .qishui.com 与各子域。
     private static final String[] COOKIE_URLS = {
         "https://api.qishui.com/",
-        "https://bubble.qishui.com/",
-        "https://www.qishui.com/"
+        "https://www.qishui.com/",
+        "https://bff-pc.qishui.com/",
+        "https://bubble.qishui.com/"
     };
 
     private WebView webView;
@@ -62,14 +83,12 @@ public class QishuiLoginActivity extends Activity {
             if (finished) return;
             LinkedHashMap<String, String> map = collectCookieMap();
             if (hasSessionKey(map)) {
-                // 检测到会话后再等一拍，让 sid_guard 等后续 Cookie 写全，然后读最终结果返回。
                 statusText.setText("已检测到登录，正在完成…");
                 handler.postDelayed(() -> finishWithCookie(buildCookieHeader(collectCookieMap())), 1200);
                 return;
             }
-            // 长时间未检测到时给一点状态提示，不阻断用户继续操作。
             if (pollCount == 20) {
-                statusText.setText("请在网页里完成登录；登录后会自动识别");
+                statusText.setText("请用最新版汽水音乐 App 扫码，登录后会自动识别");
             }
             handler.postDelayed(this, 1500);
         }
@@ -78,8 +97,7 @@ public class QishuiLoginActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        String url = getIntent().getStringExtra(EXTRA_URL);
-        if (url == null || url.isEmpty()) url = DEFAULT_URL;
+        String overrideUrl = getIntent().getStringExtra(EXTRA_URL);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -93,9 +111,8 @@ public class QishuiLoginActivity extends Activity {
         bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setBackgroundColor(Color.parseColor("#141417"));
         bar.setPadding(dp(8), 0, dp(8), 0);
-        LinearLayout.LayoutParams barLp = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
-        root.addView(bar, barLp);
+        root.addView(bar, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
 
         Button back = new Button(this);
         back.setText("←");
@@ -104,14 +121,12 @@ public class QishuiLoginActivity extends Activity {
         bar.addView(back, new LinearLayout.LayoutParams(dp(56), ViewGroup.LayoutParams.MATCH_PARENT));
 
         TextView title = new TextView(this);
-        title.setText("登录汽水音乐");
+        title.setText("登录汽水音乐（PC 扫码）");
         title.setTextColor(Color.parseColor("#F2F2F5"));
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         title.setGravity(Gravity.CENTER);
         title.setSingleLine(true);
-        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0,
-            ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        bar.addView(title, titleLp);
+        bar.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         Button done = new Button(this);
         done.setText("完成");
@@ -128,7 +143,7 @@ public class QishuiLoginActivity extends Activity {
 
         // 状态提示行
         statusText = new TextView(this);
-        statusText.setText("用汽水 App 扫码登录，登录后会自动识别");
+        statusText.setText("请用最新版汽水音乐 App 扫描二维码，登录后会自动识别");
         statusText.setTextColor(Color.parseColor("#9AA0AC"));
         statusText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         statusText.setPadding(dp(14), dp(6), dp(14), dp(6));
@@ -148,8 +163,68 @@ public class QishuiLoginActivity extends Activity {
         cm.setAcceptCookie(true);
         cm.setAcceptThirdPartyCookies(webView, true);
 
-        webView.loadUrl(url);
+        // 页面扫码成功后会调 window.close / RPC window.close，统一回这里读 cookie 判定。
+        webView.addJavascriptInterface(new Object() {
+            @JavascriptInterface
+            public void requestClose() {
+                handler.post(() -> {
+                    LinkedHashMap<String, String> map = collectCookieMap();
+                    if (hasSessionKey(map)) {
+                        finishWithCookie(buildCookieHeader(map));
+                    } else {
+                        cancelAndFinish();
+                    }
+                });
+            }
+        }, "FoliaQishuiLogin");
+
+        if (overrideUrl != null && !overrideUrl.isEmpty()) {
+            webView.loadUrl(overrideUrl);
+        } else {
+            loadOfficialLoginPage();
+        }
         handler.postDelayed(pollRunnable, 1500);
+    }
+
+    /** 读取内置官方登录页，注入设备配置后以 file:// 来源加载（保留跨域放行）。 */
+    private void loadOfficialLoginPage() {
+        try {
+            String html = readAsset(LOGIN_ASSET);
+            JSONObject cfg = new JSONObject();
+            cfg.put("deviceId", getOrCreateId("qishui_device_id"));
+            cfg.put("installId", getOrCreateId("qishui_install_id"));
+            cfg.put("os", "Windows");
+            cfg.put("computerName", Build.MODEL != null ? Build.MODEL : "Folia");
+            cfg.put("fontPrefix", "fonts");
+            html = html.replace("/*__FOLIA_CONFIG_PLACEHOLDER__*/ null", cfg.toString());
+            webView.loadDataWithBaseURL(
+                    LOCAL_LOGIN_BASE, html, "text/html", "UTF-8", null);
+        } catch (Exception e) {
+            statusText.setText("登录页加载失败：" + e.getMessage());
+        }
+    }
+
+    private String readAsset(String name) throws Exception {
+        try (InputStream is = getAssets().open(name)) {
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = is.read(buf)) != -1) bos.write(buf, 0, n);
+            return bos.toString("UTF-8");
+        }
+    }
+
+    /** 生成并持久化 19 位数字设备 / 安装 ID（字节设备 ID 为 19 位数字）。 */
+    private long getOrCreateId(String key) {
+        SharedPreferences sp = getSharedPreferences("folia_qishui", Context.MODE_PRIVATE);
+        long v = sp.getLong(key, 0L);
+        if (v == 0L) {
+            long id = 1_000_000_000_000_000_000L
+                    + (new Random().nextLong() >>> 1) % 9_000_000_000_000_000_000L;
+            sp.edit().putLong(key, id).apply();
+            return id;
+        }
+        return v;
     }
 
     private void configureWebView(WebView view) {
@@ -164,7 +239,13 @@ public class QishuiLoginActivity extends Activity {
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
-        s.setUserAgentString(s.getUserAgentString());
+        // file:// 页面放行跨域：等价 Electron 登录窗口的 webSecurity 豁免，官方 XHR 才能带通。
+        s.setAllowFileAccess(true);
+        s.setAllowContentAccess(true);
+        s.setAllowFileAccessFromFileURLs(true);
+        s.setAllowUniversalAccessFromFileURLs(true);
+        // 桌面身份，便于官方页面 / 风控按 PC 处理。
+        s.setUserAgentString(DESKTOP_UA);
         view.setWebChromeClient(new WebChromeClient());
         view.setWebViewClient(new WebViewClient() {
             @Override
@@ -175,6 +256,12 @@ public class QishuiLoginActivity extends Activity {
             @Override
             public void onPageFinished(WebView v, String u) {
                 super.onPageFinished(v, u);
+                // 隐藏 PC 页面自带标题栏（App 已用原生工具栏）。
+                v.evaluateJavascript(
+                        "(function(){var st=document.createElement('style');"
+                                + "st.textContent='.windows-controls{display:none!important;}';"
+                                + "(document.head||document.documentElement).appendChild(st);})();",
+                        null);
                 if (!finished) {
                     LinkedHashMap<String, String> map = collectCookieMap();
                     if (hasSessionKey(map)) {

@@ -311,32 +311,22 @@ const QishuiSmsLoginForm = ({ onSendSms, onSmsLogin, onImportCookie, onSuccess }
                                 {cookieBusy ? <Loader2 size={14} className="animate-spin" /> : '用 Cookie 登录'}
                             </button>
                             {cookieMsg ? (
-                                <div className="mt-2">
-                                    <p className={`text-[11px] leading-snug ${cookieMsg.ok ? 'opacity-90' : 'text-rose-400'}`}
-                                       style={{
-                                           color: cookieMsg.ok ? 'var(--text-secondary)' : undefined,
-                                           whiteSpace: 'pre-wrap',
-                                           wordBreak: 'break-all',
-                                           maxHeight: 240,
-                                           overflowY: 'auto',
-                                           background: 'rgba(255,255,255,0.04)',
-                                           border: '1px solid rgba(255,255,255,0.08)',
-                                           borderRadius: 10,
-                                           padding: '8px 10px',
-                                           WebkitUserSelect: 'text',
-                                           userSelect: 'text',
-                                       }}>
-                                        {cookieMsg.text}
-                                    </p>
-                                    <button
-                                        type="button"
-                                        onClick={() => { try { navigator.clipboard?.writeText(cookieMsg.text); } catch { /* 忽略 */ } }}
-                                        className="mt-1 text-[10px] underline opacity-70 cursor-pointer"
-                                        style={{ color: 'var(--text-secondary)' }}
-                                    >
-                                        复制诊断（发给豆包）
-                                    </button>
-                                </div>
+                                <p className={`mt-2 text-[11px] leading-snug ${cookieMsg.ok ? 'opacity-90' : 'text-rose-400'}`}
+                                   style={{
+                                       color: cookieMsg.ok ? 'var(--text-secondary)' : undefined,
+                                       whiteSpace: 'pre-wrap',
+                                       wordBreak: 'break-all',
+                                       maxHeight: 200,
+                                       overflowY: 'auto',
+                                       background: 'rgba(255,255,255,0.04)',
+                                       border: '1px solid rgba(255,255,255,0.08)',
+                                       borderRadius: 10,
+                                       padding: '8px 10px',
+                                       WebkitUserSelect: 'text',
+                                       userSelect: 'text',
+                                   }}>
+                                    {cookieMsg.text}
+                                </p>
                             ) : null}
                         </div>
                     ) : null}
