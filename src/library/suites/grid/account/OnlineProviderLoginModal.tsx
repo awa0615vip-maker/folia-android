@@ -98,7 +98,6 @@ const OnlineProviderLoginModal = ({
     onClose,
     smsLogin,
 }: OnlineProviderLoginModalProps) => {
-    const [loginMode, setLoginMode] = useState<'qr' | 'sms'>('qr');
     const [diagCopyState, setDiagCopyState] = useState<'idle' | 'working' | 'copied' | 'failed'>('idle');
     const copyDiagnostics = async () => {
         if (!diagnosticsEntry) return;
@@ -120,8 +119,8 @@ const OnlineProviderLoginModal = ({
 
     // 步骤一：还没选登录方式，二维码区显示占位框，且不会向后端发出任何请求。
     const awaitingMethod = Boolean(loginMethods) && loginMethods?.selectedId == null;
-    // 手机号模式（仅汽水）：二维码区整体换成短信表单，扫码失败帮助也一并隐藏。
-    const isSmsMode = Boolean(smsLogin) && loginMode === 'sms';
+    // 手机号模式（仅汽水）：汽水只保留手机号登录，直接把二维码区换成短信表单，不再提供扫码入口。
+    const isSmsMode = Boolean(smsLogin);
     // 后端故障优先于其余所有状态：这时候刷新二维码没有意义。
     const canRetry = (state === 'expired' || state === 'error') && !awaitingMethod && !backendFailure && !isSmsMode;
     const twoColumns = Boolean(failureHelp) && !isSmsMode;
@@ -154,28 +153,6 @@ const OnlineProviderLoginModal = ({
                     <X size={16} />
                 </button>
                 <h3 className="text-lg font-bold mb-6" style={{ color: 'var(--text-primary)' }}>{title}</h3>
-                {smsLogin && (
-                    <div className="mb-5 flex items-center justify-center gap-1 rounded-full border border-white/10 bg-white/5 p-1">
-                        <button
-                            type="button"
-                            onClick={() => setLoginMode('qr')}
-                            aria-pressed={loginMode === 'qr'}
-                            className={`flex-1 rounded-full px-4 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${loginMode === 'qr' ? 'bg-white/15' : 'opacity-50'}`}
-                            style={{ color: 'var(--text-primary)' }}
-                        >
-                            扫码登录
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => setLoginMode('sms')}
-                            aria-pressed={loginMode === 'sms'}
-                            className={`flex-1 rounded-full px-4 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${loginMode === 'sms' ? 'bg-white/15' : 'opacity-50'}`}
-                            style={{ color: 'var(--text-primary)' }}
-                        >
-                            手机号登录
-                        </button>
-                    </div>
-                )}
                 {loginMethods && !isSmsMode && (
                     <div className="mb-5">
                         <p className="text-[10px] font-semibold uppercase tracking-[0.16em] opacity-45 mb-1.5" style={{ color: 'var(--text-secondary)' }}>

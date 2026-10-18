@@ -57,6 +57,48 @@ type CookieMap = Record<string, string>;
 
 let cookieCache: CookieMap | null = null;
 
+// passport 设备标识：每安装随机生成一次并持久化，避免全网共用固定设备 id 触发风控。
+const PASSPORT_DEVICE_KEY = 'passport-device';
+type PassportDeviceIds = { deviceId: string; installId: string };
+let passportDeviceCache: PassportDeviceIds | null = null;
+
+const getPassportDeviceIds = (): PassportDeviceIds => {
+    if (passportDeviceCache) return passportDeviceCache;
+    try {
+        const raw = readProviderSessionValue(QISHUI_PROVIDER_ID, PASSPORT_DEVICE_KEY);
+        if (raw) {
+            const parsed = JSON.parse(raw) as Partial<PassportDeviceIds>;
+            if (parsed.deviceId && parsed.installId) {
+                passportDeviceCache = { deviceId: parsed.deviceId, installId: parsed.installId };
+                return passportDeviceCache;
+            }
+        }
+    } catch {
+        /* 损坏则重新生成 */
+    }
+    // 时间戳风格数字 id（与参考实现一致），installId = deviceId + 1。
+    const base = Date.now();
+    const ids = { deviceId: String(base), installId: String(base + 1) };
+    passportDeviceCache = ids;
+    writeProviderSessionValue(QISHUI_PROVIDER_ID, PASSPORT_DEVICE_KEY, JSON.stringify(ids));
+    return ids;
+};
+
+// 每次请求一个随机 trace-id（参考实现 passport 请求头携带 X-Tt-Passport-Trace-Id）。
+const randomTraceId = (): string => {
+    const bytes = new Uint8Array(8);
+    try {
+        const cryptoObj = globalThis.crypto ?? (typeof window !== 'undefined' ? window.crypto : undefined);
+        cryptoObj?.getRandomValues?.(bytes);
+    } catch {
+        /* 退化为时间戳派生 */
+    }
+    if (Array.from(bytes).every(b => b === 0)) {
+        return `${Date.now().toString(16)}${Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0')}`;
+    }
+    return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+};
+
 const parseCookiePairs = (cookieHeader: string): CookieMap => {
     const out: CookieMap = {};
     if (!cookieHeader?.trim()) return out;
@@ -461,6 +503,21 @@ function csrfFromJar(jar: CookieMap): string | undefined {
     return jar.passport_csrf_token || jar.passport_csrf_token_default;
 }
 
+/** 把网络层错误（DNS / 超时 / 连接失败）翻成中文可操作提示（真机常因 VPN 导致 api.qishui.com 解析失败）。 */
+function explainSmsNetworkError(error: unknown): string {
+    const msg = error instanceof Error ? error.message : String(error);
+    if (/Unable to resolve host|No address associated|ENOTFOUND|hostname/i.test(msg)) {
+        return '无法连接汽水服务器（域名解析失败）。请关闭 VPN / 代理，或切换 Wi-Fi / 手机流量后重试。';
+    }
+    if (/timeout|timed out|ETIMEDOUT|SocketTimeout/i.test(msg)) {
+        return '连接汽水服务器超时。请检查网络（必要时关闭 VPN / 代理）后重试。';
+    }
+    if (/Failed to connect|ECONNREFUSED|ECONNRESET|Connection|SSL|TLS/i.test(msg)) {
+        return '无法连接汽水服务器。请检查网络后重试。';
+    }
+    return `网络请求失败：${msg}`;
+}
+
 /** 确保会话里有 passport_csrf_token（借 get_qrcode 预热），预热后清掉临时二维码会话。 */
 async function warmPassportCsrf(): Promise<void> {
     if (csrfFromJar(loadCookieMap())) return;
@@ -478,30 +535,35 @@ async function warmPassportCsrf(): Promise<void> {
  */
 export async function sendSmsCode(mobile: string): Promise<SmsSendResult> {
     const m = normalizeMobile(mobile);
-    await warmPassportCsrf();
-    const jar = loadCookieMap();
-    const url = `${QISHUI_API}/passport/web/send_code/?${smsPassportQuery()}`;
-    const response = await qishuiFetch(url, {
-        method: 'POST',
-        form: buildSendSmsBody(m),
-        extraHeaders: passportHeadersWithCsrf(cookieHeaderFromMap(jar), csrfFromJar(jar)),
-        cookieOverride: jar,
-        timeoutMs: 20_000,
-    });
-    const payload: any = await response.json().catch(() => null);
-    const data = payload?.data ?? {};
-    const errorCode = Number(data.error_code ?? 0);
-    const desc = String(data.description || payload?.message || '');
+    try {
+        await warmPassportCsrf();
+        const { deviceId, installId } = getPassportDeviceIds();
+        const jar = loadCookieMap();
+        const url = `${QISHUI_API}/passport/web/send_code/?${smsPassportQuery(deviceId, installId)}`;
+        const response = await qishuiFetch(url, {
+            method: 'POST',
+            form: buildSendSmsBody(m),
+            extraHeaders: passportHeadersWithCsrf(cookieHeaderFromMap(jar), csrfFromJar(jar), randomTraceId()),
+            cookieOverride: jar,
+            timeoutMs: 20_000,
+        });
+        const payload: any = await response.json().catch(() => null);
+        const data = payload?.data ?? {};
+        const errorCode = Number(data.error_code ?? 0);
+        const desc = String(data.description || payload?.message || '');
 
-    if (payload?.message === 'success' || errorCode === 0) {
-        return { ok: true, message: desc || '验证码已发送（请查收短信）', mobileTicket: data.mobile_ticket };
+        if (payload?.message === 'success' || errorCode === 0) {
+            return { ok: true, message: desc || '验证码已发送（请查收短信）', mobileTicket: data.mobile_ticket };
+        }
+        return {
+            ok: false,
+            message: explainSmsSendError(errorCode, desc),
+            mobileTicket: data.mobile_ticket,
+            retryAfterSec: errorCode === 7 || errorCode === 2156 ? 90 : undefined,
+        };
+    } catch (error) {
+        return { ok: false, message: explainSmsNetworkError(error) };
     }
-    return {
-        ok: false,
-        message: explainSmsSendError(errorCode, desc),
-        mobileTicket: data.mobile_ticket,
-        retryAfterSec: errorCode === 7 || errorCode === 2156 ? 90 : undefined,
-    };
 }
 
 /**
@@ -517,30 +579,35 @@ export async function smsLogin(
     if (c.length < 4 || c.length > 8) {
         throw new Error('验证码格式不正确');
     }
-    await warmPassportCsrf();
-    const jar = loadCookieMap();
-    const url = `${QISHUI_API}/passport/web/sms_login/?${smsPassportQuery()}`;
-    const response = await qishuiFetch(url, {
-        method: 'POST',
-        form: buildSmsLoginBody(m, c, mobileTicket),
-        extraHeaders: passportHeadersWithCsrf(cookieHeaderFromMap(jar), csrfFromJar(jar)),
-        cookieOverride: jar,
-        timeoutMs: 20_000,
-    });
-    // Set-Cookie 已由 qishuiFetch 收进全局；再从 JSON 补 session 字段。
-    const payload: any = await response.json().catch(() => null);
-    const data = payload?.data ?? {};
-    const nextJar = mergeCookieMaps(loadCookieMap());
-    for (const key of SESSION_COOKIE_KEYS) {
-        const v = data[key] ?? payload?.[key];
-        if (typeof v === 'string' && v) nextJar[key] = v;
-    }
-    saveCookieMap(nextJar);
-    if (hasLoginSession(nextJar)) return { ok: true, message: '登录成功' };
+    try {
+        await warmPassportCsrf();
+        const { deviceId, installId } = getPassportDeviceIds();
+        const jar = loadCookieMap();
+        const url = `${QISHUI_API}/passport/web/sms_login/?${smsPassportQuery(deviceId, installId)}`;
+        const response = await qishuiFetch(url, {
+            method: 'POST',
+            form: buildSmsLoginBody(m, c, mobileTicket),
+            extraHeaders: passportHeadersWithCsrf(cookieHeaderFromMap(jar), csrfFromJar(jar), randomTraceId()),
+            cookieOverride: jar,
+            timeoutMs: 20_000,
+        });
+        // Set-Cookie 已由 qishuiFetch 收进全局；再从 JSON 补 session 字段。
+        const payload: any = await response.json().catch(() => null);
+        const data = payload?.data ?? {};
+        const nextJar = mergeCookieMaps(loadCookieMap());
+        for (const key of SESSION_COOKIE_KEYS) {
+            const v = data[key] ?? payload?.[key];
+            if (typeof v === 'string' && v) nextJar[key] = v;
+        }
+        saveCookieMap(nextJar);
+        if (hasLoginSession(nextJar)) return { ok: true, message: '登录成功' };
 
-    const errorCode = Number(data.error_code ?? 0);
-    const desc = String(data.description || payload?.message || '登录失败');
-    return { ok: false, message: desc + (errorCode ? ` (${errorCode})` : '') };
+        const errorCode = Number(data.error_code ?? 0);
+        const desc = String(data.description || payload?.message || '登录失败');
+        return { ok: false, message: desc + (errorCode ? ` (${errorCode})` : '') };
+    } catch (error) {
+        return { ok: false, message: explainSmsNetworkError(error) };
+    }
 }
 
 // ─── 个人信息（登录态自检）────────────────────────────────────────────────

@@ -106,9 +106,10 @@ export const SESSION_COOKIE_KEYS = ['sessionid', 'sessionid_ss', 'sid_tt', 'sid_
 // ─── 短信验证码登录（passport web SMS）────────────────────────────────────
 
 /**
- * 短信 passport 接口 query（send_code / sms_login 通用），对齐 PC 网页版账号 SDK。
+ * 短信 passport 接口 query（send_code / sms_login 通用），对齐参考实现 live-probed 的 liteQuery。
+ * 设备 id 由调用方传入（每安装随机生成并持久化，避免全网共用固定 id 触发风控）。
  */
-export function smsPassportQuery(): string {
+export function smsPassportQuery(deviceId: string, installId: string): string {
     const params = new URLSearchParams({
         aid: QISHUI_AID,
         app_name: QISHUI_APP_NAME,
@@ -117,12 +118,13 @@ export function smsPassportQuery(): string {
         is_from_ttaccountsdk: '1',
         account_sdk_source: 'web',
         is_new_login: '1',
-        device_id: DEFAULT_DEVICE_ID,
-        install_id: DEFAULT_IID,
-        did: DEFAULT_DEVICE_ID,
-        iid: DEFAULT_IID,
+        device_id: deviceId,
+        install_id: installId,
+        did: deviceId,
+        iid: installId,
         device_platform: 'windows',
-        version_code: QISHUI_VERSION_CODE,
+        // 与参考实现 SMS liteQuery 的 live-probed 版本号一致（比业务 pcQuery 略低，passport 实测更稳）。
+        version_code: '30050100',
         channel: 'official',
     });
     return params.toString();
@@ -153,10 +155,11 @@ export function buildSmsLoginBody(mobile: string, code: string, mobileTicket?: s
     return pairs.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
 }
 
-/** passport 请求头，带上 CSRF token（会话 cookie 里的 passport_csrf_token）。 */
-export function passportHeadersWithCsrf(cookie?: string, csrf?: string): Record<string, string> {
+/** passport 请求头，带上 CSRF token（会话 cookie 里的 passport_csrf_token）与本次追踪 id。 */
+export function passportHeadersWithCsrf(cookie?: string, csrf?: string, traceId?: string): Record<string, string> {
     const headers = passportHeaders(cookie);
     if (csrf) headers['x-tt-passport-csrf-token'] = csrf;
+    if (traceId) headers['X-Tt-Passport-Trace-Id'] = traceId;
     return headers;
 }
 

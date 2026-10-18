@@ -173,6 +173,11 @@ export const qishuiProvider: OnlineMusicProvider = {
         async getQrLoginDiagnostics() {
             return getQrCheckDiagnosticLines();
         },
+        getQrLoginMethods() {
+            // 汽水已移除扫码、仅保留手机号登录。返回一个占位方法让账号层停在“选择方式”，
+            // 避免打开登录窗即自动发起二维码轮询（扫码真机已确认不可用）。UI 对汽水直接渲染手机号表单。
+            return [{ id: 'sms', labelKey: 'account.login.method.sms', iconKey: 'phone' }];
+        },
         sendSmsCode: (mobile: string) => sendSmsCode(mobile),
         smsLogin: (mobile: string, code: string, mobileTicket?: string) => smsLogin(mobile, code, mobileTicket),
     },
