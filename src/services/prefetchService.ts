@@ -22,8 +22,11 @@ import { modeNeedsBeatGrid } from './automix/transitionStrategy';
 import { useLyricSettingsStore } from '../stores/useLyricSettingsStore';
 import { useAutomixSettingsStore } from '../stores/useAutomixSettingsStore';
 import { useAudioSettingsStore } from '../stores/useAudioSettingsStore';
+import { readEffectiveTier } from '../stores/usePerformanceTierStore';
 import { classifyPlaybackError } from './playbackRecovery/onlinePlaybackFailure';
 import { getProviderPlaybackCooldown, noteProviderFailure } from './playbackRecovery/providerPlaybackCooldown';
+import { saveAudioBlob } from './audioCache';
+import { clearCachedSongAudioDistrust, isCacheableAudioResponse } from './playbackRecovery/mediaCacheGuard';
 
 // Prefetch configuration
 //
@@ -442,6 +445,146 @@ export const updatePrefetchedAudioUrl = (
     touchPrefetchCacheEntry(songKey, nextData);
 };
 
+// ---- 音频字节预下载（先缓存后播）---------------------------------------------
+//
+// 上面的预取只解析“轻资源”（URL / 歌词 / 封面），在线歌第一遍播放时仍把远程 URL 直接交给播放器
+// 边下边播，弱网下缓冲跟不上就会卡顿。这里在播放当前歌期间，把接下来的歌整曲提前下载到本地媒体
+// 缓存：切到下一首时它大概率已完整落盘，loadOnlineSongAudioSource 第一步命中本地 blob，直接本地
+// 秒播而不再走网络。为了不和当前歌抢带宽、也不拖慢起播，第一首延迟启动、各首串行，且只在
+// enableMediaCache 打开时运行。
+const AHEAD_BYTE_COUNT_BY_TIER: Record<'low' | 'balanced' | 'high', number> = {
+  low: 1,
+  balanced: 1,
+  high: 2,
+};
+
+/** 第一首字节下载的启动延迟：先让当前歌抢占缓冲，再开始拉取后续歌曲。 */
+const AHEAD_FIRST_DELAY_MS = 2500;
+
+/** 跨调度去重：同一首歌不允许并发下载。 */
+const audioBytesInFlight = new Set<string>();
+
+/** 整曲落盘后，把内存预取条目标记为 CACHED_IN_DB，让后续读取直接走本地而不是远程 URL。 */
+const markPrefetchAudioCached = (song: SongResult): void => {
+  const songKey = getPrefetchSongKey(song);
+  const existing = prefetchCache.get(songKey);
+  const nextData: PrefetchedSongData = {
+    songKey,
+    songId: song.id,
+    audioUrl: 'CACHED_IN_DB',
+    audioUrlFetchedAt: 0,
+    audioUrlQuality: null,
+    replayGain: existing?.replayGain ?? song.replayGain,
+    lyrics: existing?.lyrics || null,
+    lyricRaw: existing?.lyricRaw || null,
+    lyricPreferenceSource: existing?.lyricPreferenceSource || null,
+    coverUrl: existing?.coverUrl || null,
+  };
+  touchPrefetchCacheEntry(songKey, nextData);
+};
+
+/**
+ * 把一首歌的完整音频字节下载进本地媒体缓存。已缓存 / 非在线 / 无可用 URL / 关闭缓存时直接跳过。
+ * 任何失败都静默回退：大不了这首歌仍走远程边下边播（旧行为），绝不能影响播放。
+ */
+const downloadPrefetchedAudioBytes = async (
+  song: SongResult,
+  audioQuality: AudioQualityPreference,
+  signal: AbortSignal,
+): Promise<void> => {
+  if (signal.aborted) return;
+  if (!useAudioSettingsStore.getState().enableMediaCache) return;
+
+  const sourceRef = getPlaybackSourceRef(song);
+  if (sourceRef.kind !== 'online' || !omni.canPlaySong(song)) return;
+
+  const cacheKey = getSongResourceCacheKey('audio', song);
+  if (audioBytesInFlight.has(cacheKey)) return;
+
+  if (await hasCachedSongAudio(song)) {
+    markPrefetchAudioCached(song);
+    return;
+  }
+
+  // 优先复用内存里已经解析好的 URL，避免为同一首歌再向 provider 取一次地址；没有再现场解析。
+  let audioUrl: string | null | undefined = getPrefetchedData(song, audioQuality)?.audioUrl;
+  if (audioUrl === 'CACHED_IN_DB') return;
+  if (!audioUrl || audioUrl.startsWith('blob:')) {
+    const resolved = await resolvePrefetchAudioUrl(song, audioQuality, signal);
+    if (signal.aborted || !resolved) return;
+    if (resolved.audioUrl === 'CACHED_IN_DB') {
+      markPrefetchAudioCached(song);
+      return;
+    }
+    audioUrl = resolved.audioUrl;
+  }
+  if (!audioUrl || audioUrl.startsWith('blob:')) return;
+
+  audioBytesInFlight.add(cacheKey);
+  try {
+    const response = await fetch(audioUrl, { signal });
+    if (signal.aborted) return;
+    const blob = await response.blob();
+    // 与 playedTrackCache 相同的守卫：错误页 / JSON / 截断下载不能当音频写进缓存顶掉真音源。
+    if (!isCacheableAudioResponse(response, blob)) {
+      console.warn('[Prefetch] Skipped ahead-download that is not audio:', song.name, {
+        status: response.status,
+        contentType: response.headers?.get('content-type') ?? blob.type,
+        size: blob.size,
+      });
+      return;
+    }
+    await saveAudioBlob(cacheKey, blob);
+    clearCachedSongAudioDistrust(song);
+    markPrefetchAudioCached(song);
+    console.log('[Prefetch] Full audio downloaded ahead of playback:', song.name);
+  } catch (error) {
+    // abort 是正常的切歌行为，不打 error；其余失败静默，回退到流式播放。
+    if (!signal.aborted) {
+      console.warn(`[Prefetch] Ahead audio download failed for ${song.name}:`, error);
+    }
+  } finally {
+    audioBytesInFlight.delete(cacheKey);
+  }
+};
+
+/**
+ * 调度“后续歌曲整曲预下载”：下一首优先、各首串行、第一首延迟启动以给当前歌让路。
+ * 传入的 forwardSongs 需按播放顺序排好（下一首在前）。
+ */
+const scheduleAheadAudioDownloads = (
+  forwardSongs: SongResult[],
+  audioQuality: AudioQualityPreference,
+  signal: AbortSignal,
+): void => {
+  if (!useAudioSettingsStore.getState().enableMediaCache) return;
+  const count = AHEAD_BYTE_COUNT_BY_TIER[readEffectiveTier()] ?? 1;
+  const targets = forwardSongs.slice(0, count);
+  if (targets.length === 0) return;
+
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const onAbort = () => {
+    if (timer != null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+  if (signal.aborted) return;
+  signal.addEventListener('abort', onAbort, { once: true });
+
+  const runIndex = async (index: number): Promise<void> => {
+    if (signal.aborted || index >= targets.length) return;
+    await downloadPrefetchedAudioBytes(targets[index], audioQuality, signal);
+    if (!signal.aborted) await runIndex(index + 1);
+  };
+
+  // 第一首延迟启动，给当前歌留出缓冲时间；之后串行下载。
+  timer = setTimeout(() => {
+    timer = null;
+    if (!signal.aborted) void runIndex(0);
+  }, AHEAD_FIRST_DELAY_MS);
+};
+
 /**
  * Prefetch nearby songs based on current song and queue
  */
@@ -533,6 +676,17 @@ export const prefetchNearbySongs = async (
     };
 
     prefetchWithIdle(songsToPrefetch, 0);
+
+    // 音频字节预下载：只对“下一首 / 下下首”整曲提前落盘（不含上一首），这样切到下一首时它
+    // 多半已完整在本地，直接本地秒播、不再边下边播卡顿。
+    const forwardSongs: SongResult[] = [];
+    for (let i = 1; i <= PREFETCH_COUNT_NEXT; i++) {
+      const idx = currentIndex + i;
+      if (idx < queue.length) {
+        forwardSongs.push(queue[idx]);
+      }
+    }
+    scheduleAheadAudioDownloads(forwardSongs, audioQuality, signal);
 };
 
 /**

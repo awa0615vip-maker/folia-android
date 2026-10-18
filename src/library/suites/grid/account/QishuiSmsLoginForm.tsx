@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { Loader2, MessageSquare, ShieldCheck } from 'lucide-react';
+import { Loader2, MessageSquare, QrCode, ShieldCheck } from 'lucide-react';
+import { openQishuiWebLogin } from '../../../../services/nativeAndroidBridge';
+
+const isAndroidNative = (): boolean =>
+    typeof window !== 'undefined'
+    && (window as unknown as { Capacitor?: { getPlatform?: () => string } }).Capacitor?.getPlatform?.() === 'android';
 
 type SmsSendOutcome = {
     ok: boolean;
@@ -43,6 +48,7 @@ const QishuiSmsLoginForm = ({ onSendSms, onSmsLogin, onImportCookie, onSuccess }
     const [showCookie, setShowCookie] = useState(false);
     const [cookieText, setCookieText] = useState('');
     const [cookieBusy, setCookieBusy] = useState(false);
+    const [webBusy, setWebBusy] = useState(false);
     const [cookieMsg, setCookieMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
     useEffect(() => {
@@ -147,6 +153,28 @@ const QishuiSmsLoginForm = ({ onSendSms, onSmsLogin, onImportCookie, onSuccess }
         }
     };
 
+    // 内置网页扫码登录：打开原生 WebView，登录后自动带出 Cookie 并导入。
+    const handleWebLogin = async () => {
+        if (!onImportCookie) return;
+        setCookieMsg(null);
+        setWebBusy(true);
+        try {
+            const { cancelled, cookie } = await openQishuiWebLogin();
+            if (cancelled || !cookie.trim()) return;
+            const result = await onImportCookie(cookie);
+            if (!result.ok) {
+                setCookieMsg({ ok: false, text: result.message });
+                return;
+            }
+            setCookieMsg({ ok: true, text: result.message });
+            onSuccess();
+        } catch (e) {
+            setCookieMsg({ ok: false, text: e instanceof Error ? e.message : '网页登录失败，请重试' });
+        } finally {
+            setWebBusy(false);
+        }
+    };
+
     return (
         <div className="w-full text-left">
             <div className="flex items-center gap-2 mb-4 text-[11px] opacity-55" style={{ color: 'var(--text-secondary)' }}>
@@ -228,6 +256,28 @@ const QishuiSmsLoginForm = ({ onSendSms, onSmsLogin, onImportCookie, onSuccess }
                     </button>
                     {showCookie ? (
                         <div className="mt-3">
+                            {isAndroidNative() ? (
+                                <>
+                                    <button
+                                        type="button"
+                                        onClick={handleWebLogin}
+                                        disabled={webBusy || cookieBusy}
+                                        className="w-full rounded-xl bg-white/5 border border-white/10 py-2.5 text-sm font-semibold transition-colors hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
+                                        style={{ background: '#10B981', color: '#fff', borderColor: 'transparent' }}
+                                    >
+                                        {webBusy ? <Loader2 size={16} className="animate-spin" /> : <QrCode size={16} />}
+                                        {webBusy ? '正在登录…' : '用汽水 App 扫码登录（最简单，不用抓包）'}
+                                    </button>
+                                    <p className="text-[11px] leading-snug opacity-55 mt-2 mb-3" style={{ color: 'var(--text-secondary)' }}>
+                                        点上面按钮 → 弹出汽水官方网页 → 用手机上的汽水 App 扫码并确认 → 自动登录。
+                                    </p>
+                                    <div className="flex items-center gap-2 mb-2 opacity-60">
+                                        <span className="flex-1 h-px bg-white/10" />
+                                        <span className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>扫码不行？手动粘贴 Cookie</span>
+                                        <span className="flex-1 h-px bg-white/10" />
+                                    </div>
+                                </>
+                            ) : null}
                             <p className="text-[11px] leading-snug opacity-55 mb-2" style={{ color: 'var(--text-secondary)' }}>
                                 1. 在手机装「Stream 抓包」或「Reqable」（免费免 root），开始抓包并信任证书；<br />
                                 2. 打开汽水音乐 App，确认已登录，随便点一下首页；<br />

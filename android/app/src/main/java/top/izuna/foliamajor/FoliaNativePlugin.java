@@ -729,6 +729,41 @@ public class FoliaNativePlugin extends Plugin {
         startActivityForResult(call, intent, "handlePickedAudioFolder");
     }
 
+    // ===== 汽水音乐「内置网页登录」：在 App 内 WebView 扫码登录，回传整段 Cookie =====
+
+    @PluginMethod
+    public void openQishuiWebLogin(PluginCall call) {
+        Activity activity = getActivity();
+        if (activity == null) {
+            call.reject("No activity");
+            return;
+        }
+        String url = call.getString("url", "");
+        Intent intent = new Intent(activity, QishuiLoginActivity.class);
+        if (url != null && !url.isEmpty()) {
+            intent.putExtra(QishuiLoginActivity.EXTRA_URL, url);
+        }
+        startActivityForResult(call, intent, "handleQishuiWebLogin");
+    }
+
+    @ActivityCallback
+    private void handleQishuiWebLogin(PluginCall call, ActivityResult activityResult) {
+        if (call == null) return;
+        int resultCode = activityResult == null ? Activity.RESULT_CANCELED : activityResult.getResultCode();
+        Intent data = activityResult == null ? null : activityResult.getData();
+        if (resultCode != Activity.RESULT_OK || data == null) {
+            JSObject cancelled = new JSObject();
+            cancelled.put("cancelled", true);
+            call.resolve(cancelled);
+            return;
+        }
+        String cookie = data.getStringExtra(QishuiLoginActivity.EXTRA_COOKIE);
+        JSObject result = new JSObject();
+        result.put("cancelled", false);
+        result.put("cookie", cookie == null ? "" : cookie);
+        call.resolve(result);
+    }
+
     /** 供 WebView 重建导入音频的流地址（端口每次启动都可能不同）。 */
     @PluginMethod
     public void localAudioServerPort(PluginCall call) {

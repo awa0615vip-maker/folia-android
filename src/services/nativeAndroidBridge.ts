@@ -55,6 +55,11 @@ type NativePlugin = {
     headers?: Array<{ name?: string; value?: string }> | Record<string, string>;
     bodyBase64?: string;
   }>;
+  // 汽水音乐「内置网页登录」：打开原生 WebView 扫码登录，回传整段 Cookie。
+  openQishuiWebLogin?: (options: Record<string, unknown>) => Promise<{
+    cancelled?: boolean;
+    cookie?: string;
+  }>;
 };
 
 type ApiHandler = (input: Record<string, unknown>) => Promise<unknown>;
@@ -98,6 +103,18 @@ export const isBridgedApiUrl = (url: string): boolean => {
   } catch {
     return false;
   }
+};
+
+/**
+ * 汽水音乐「内置网页登录」：仅在 Android 原生壳里可用。
+ * 打开一个全屏 WebView 让用户用汽水 App 扫码登录，原生侧读出会话 Cookie 返回；
+ * 用户取消时 cancelled=true。非安卓环境（浏览器预览）返回 cancelled。
+ */
+export const openQishuiWebLogin = async (url?: string): Promise<{ cancelled: boolean; cookie: string }> => {
+  const plugin = getPlugin();
+  if (!plugin?.openQishuiWebLogin) return { cancelled: true, cookie: '' };
+  const result = await plugin.openQishuiWebLogin(url ? { url } : {});
+  return { cancelled: Boolean(result?.cancelled), cookie: result?.cookie ?? '' };
 };
 
 const serializeBody = async (body: BodyInit | null | undefined): Promise<{

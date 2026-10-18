@@ -1,6 +1,7 @@
 import { getFromCache, removeFromCache, saveToCache } from './db';
 import { isBlob } from '../utils/blobGuards';
 import { useAudioSettingsStore } from '../stores/useAudioSettingsStore';
+import { touchAudioCachePrune } from './audioCachePrune';
 
 /**
  * The ceiling the desktop cache is pruned back to after each write, in bytes.
@@ -105,7 +106,10 @@ export async function saveAudioBlob(cacheKey: string, blob: Blob): Promise<void>
     const buffer = await blob.arrayBuffer();
     await window.electron!.saveAudioCache(cacheKey, buffer, blob.type || 'audio/mpeg', cacheLimitBytes());
   } else {
+    // 安卓 / WebView 端写入 IndexedDB；桌面端由主进程按设置上限裁剪，这里补一次非阻塞的
+    // 容量上限 + LRU 裁剪，避免音频缓存无限堆积直到配额耗尽。
     await saveToCache(cacheKey, blob);
+    touchAudioCachePrune();
   }
 
   // After the write, and over a copy: a listener that throws must not fail a write that has already
