@@ -292,6 +292,13 @@ export const omni = {
         return auth.smsLogin(mobile, code, mobileTicket);
     },
 
+    // 粘贴 Cookie 登录（图形验证 / 短信风控兜底，目前仅汽水实现）。
+    async importCookie(providerId: OmniProviderId, cookieText: string) {
+        const auth = requireOnlineMusicProvider(providerId).auth;
+        if (!auth?.importCookie) return unsupported(providerId, 'cookie-login');
+        return auth.importCookie(cookieText);
+    },
+
     async getUserPlaylists(userId: MediaId, page: PageInput): Promise<OmniPage<OmniCollection>> {
         return withActiveProvider(async provider => provider.library?.getUserPlaylists?.(userId, page.limit, page.offset) ?? emptyPage(page.offset));
     },

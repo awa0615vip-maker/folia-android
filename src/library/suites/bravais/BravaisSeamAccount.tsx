@@ -79,7 +79,7 @@ const LoginView: React.FC<{ form: BravaisLoginForm; actions: BravaisAccountActio
             </div>
             {form.sms ? (
                 <div className="bravais-login-sms" style={{ alignSelf: 'center', width: '100%', maxWidth: 360 }}>
-                    <QishuiSmsLoginForm onSendSms={actions.sendSms} onSmsLogin={actions.submitSms} onSuccess={actions.close} />
+                    <QishuiSmsLoginForm onSendSms={actions.sendSms} onSmsLogin={actions.submitSms} onImportCookie={actions.importCookie} onSuccess={actions.close} />
                 </div>
             ) : (
                 <>

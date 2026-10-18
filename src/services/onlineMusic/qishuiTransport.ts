@@ -631,6 +631,59 @@ export async function getProfile(): Promise<ProviderUser | null> {
     };
 }
 
+// ─── 粘贴 Cookie 登录（短信风控 / 图形验证兜底）────────────────────────────
+
+/**
+ * 用户从汽水 App / 网页抓包复制整段 Cookie（含 sessionid 等）粘贴进来，直接建立会话。
+ * 只用于登录本人账号；不做 me 失败即清空（避免刚导入、接口瞬时风控被误清）。
+ */
+export async function importQishuiCookie(rawCookieText: string): Promise<{
+    ok: boolean;
+    message: string;
+    matchedKeys?: string[];
+}> {
+    const text = String(rawCookieText ?? '').trim();
+    if (!text) return { ok: false, message: 'Cookie 为空，请把抓到的完整 Cookie 粘贴进来' };
+
+    // 兼容：去掉 "Cookie:"/"Set-Cookie:" 前缀、首尾引号、多条 -H 拼接，只留 key=value。
+    const cleaned = text
+        .replace(/(^|[\s;])(?:set-)?cookie\s*:\s*/gi, '; ')
+        .replace(/^["'`]+|["'`]+$/g, '');
+    const incoming = parseCookiePairs(cleaned);
+    if (Object.keys(incoming).length === 0) {
+        return { ok: false, message: '没识别到 Cookie，确认复制的是「Cookie:」那一整行（形如 sessionid=…; sid_tt=…）' };
+    }
+    const sessionKeys = SESSION_COOKIE_KEYS.filter(k => Boolean(incoming[k]));
+    if (sessionKeys.length === 0) {
+        return {
+            ok: false,
+            message: `识别到 ${Object.keys(incoming).length} 个字段，但没有会话字段（${SESSION_COOKIE_KEYS.join(' / ')}）。请抓 api.qishui.com 域名下、且已登录的请求。`,
+        };
+    }
+
+    // 合并保留已有 cookie（passport_csrf 等），覆盖同名键。
+    const merged = mergeCookieMaps(loadCookieMap(), incoming);
+    saveCookieMap(merged);
+
+    // 轻量自检（不清空会话）：能拉到 me 就给昵称，拉不到也保留 Cookie。
+    let nickname = '';
+    try {
+        const data = await qishuiJson<any>(`${QISHUI_API}/luna/pc/me?${pcQuery()}`);
+        const me = data?.my_info ?? data?.user ?? data?.data ?? null;
+        if (me && (me.id ?? me.user_id)) {
+            nickname = String(me.nickname ?? me.public_name ?? me.user_id ?? '');
+        }
+    } catch {
+        /* 自检失败不阻断，保留已导入的 Cookie */
+    }
+
+    return {
+        ok: true,
+        message: nickname ? `登录成功：${nickname}` : '已保存会话 Cookie（识别到 ' + sessionKeys.join('、') + '），请返回看能否加载你的音乐。',
+        matchedKeys: sessionKeys.slice() as string[],
+    };
+}
+
 // ─── 搜索 ─────────────────────────────────────────────────────────────────
 
 const randomUuid = (): string => {

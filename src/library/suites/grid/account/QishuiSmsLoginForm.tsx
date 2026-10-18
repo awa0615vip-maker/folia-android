@@ -9,10 +9,13 @@ type SmsSendOutcome = {
 };
 
 type SmsLoginOutcome = { ok: boolean; message: string };
+type CookieImportOutcome = { ok: boolean; message: string };
 
 type QishuiSmsLoginFormProps = {
     onSendSms: (mobile: string) => Promise<SmsSendOutcome>;
     onSmsLogin: (mobile: string, code: string, mobileTicket?: string) => Promise<SmsLoginOutcome>;
+    /** 短信被风控 / 图形验证过不去时的兜底：粘贴整段 Cookie 登录本人账号。 */
+    onImportCookie?: (cookieText: string) => Promise<CookieImportOutcome>;
     onSuccess: () => void;
 };
 
@@ -24,8 +27,9 @@ const inputClass =
 /**
  * 汽水音乐手机号 + 短信验证码登录表单（自包含）。
  * 只登录自己账号；不提供任何会员绕过或 DRM 能力。
+ * 短信收不到（平台风控 / 图形验证）时，可展开底部的「粘贴 Cookie 登录」兜底。
  */
-const QishuiSmsLoginForm = ({ onSendSms, onSmsLogin, onSuccess }: QishuiSmsLoginFormProps) => {
+const QishuiSmsLoginForm = ({ onSendSms, onSmsLogin, onImportCookie, onSuccess }: QishuiSmsLoginFormProps) => {
     const [mobile, setMobile] = useState('');
     const [code, setCode] = useState('');
     const [mobileTicket, setMobileTicket] = useState<string | undefined>(undefined);
@@ -35,6 +39,11 @@ const QishuiSmsLoginForm = ({ onSendSms, onSmsLogin, onSuccess }: QishuiSmsLogin
     const [error, setError] = useState('');
     const [info, setInfo] = useState('');
     const timerRef = useRef<number | null>(null);
+    // Cookie 兜底
+    const [showCookie, setShowCookie] = useState(false);
+    const [cookieText, setCookieText] = useState('');
+    const [cookieBusy, setCookieBusy] = useState(false);
+    const [cookieMsg, setCookieMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
     useEffect(() => {
         return () => {
@@ -114,6 +123,30 @@ const QishuiSmsLoginForm = ({ onSendSms, onSmsLogin, onSuccess }: QishuiSmsLogin
         }
     };
 
+    const handleImportCookie = async () => {
+        if (!onImportCookie) return;
+        setCookieMsg(null);
+        const text = cookieText.trim();
+        if (!text) {
+            setCookieMsg({ ok: false, text: '请先粘贴 Cookie' });
+            return;
+        }
+        setCookieBusy(true);
+        try {
+            const result = await onImportCookie(text);
+            if (!result.ok) {
+                setCookieMsg({ ok: false, text: result.message });
+                return;
+            }
+            setCookieMsg({ ok: true, text: result.message });
+            onSuccess();
+        } catch (e) {
+            setCookieMsg({ ok: false, text: e instanceof Error ? e.message : 'Cookie 登录失败，请重试' });
+        } finally {
+            setCookieBusy(false);
+        }
+    };
+
     return (
         <div className="w-full text-left">
             <div className="flex items-center gap-2 mb-4 text-[11px] opacity-55" style={{ color: 'var(--text-secondary)' }}>
@@ -182,6 +215,51 @@ const QishuiSmsLoginForm = ({ onSendSms, onSmsLogin, onSuccess }: QishuiSmsLogin
             >
                 {logging ? <Loader2 size={15} className="animate-spin" /> : '登录'}
             </button>
+
+            {onImportCookie ? (
+                <div className="mt-4 border-t border-white/10 pt-3">
+                    <button
+                        type="button"
+                        onClick={() => setShowCookie(v => !v)}
+                        className="text-[11px] opacity-60 hover:opacity-100 transition-opacity"
+                        style={{ color: 'var(--text-secondary)' }}
+                    >
+                        {showCookie ? '收起 ▲' : '收不到短信 / 图形验证过不去？用 Cookie 登录 ▼'}
+                    </button>
+                    {showCookie ? (
+                        <div className="mt-3">
+                            <p className="text-[11px] leading-snug opacity-55 mb-2" style={{ color: 'var(--text-secondary)' }}>
+                                1. 在手机装「Stream 抓包」或「Reqable」（免费免 root），开始抓包并信任证书；<br />
+                                2. 打开汽水音乐 App，确认已登录，随便点一下首页；<br />
+                                3. 找一条 <span style={{ opacity: 0.9 }}>api.qishui.com</span> 的请求，复制请求头里整段 Cookie，粘到下面。
+                            </p>
+                            <textarea
+                                value={cookieText}
+                                onChange={e => setCookieText(e.target.value)}
+                                placeholder="粘贴形如 sessionid=…; sessionid_ss=…; sid_tt=… 的整段 Cookie"
+                                rows={3}
+                                className="w-full rounded-xl bg-white/5 border border-white/10 px-3 py-2 text-[11px] outline-none focus:border-white/25 font-mono break-all"
+                                style={{ color: 'var(--text-primary)' }}
+                            />
+                            <button
+                                type="button"
+                                onClick={handleImportCookie}
+                                disabled={cookieBusy || !cookieText.trim()}
+                                className="mt-2 w-full rounded-xl bg-white/10 border border-white/10 py-2 text-xs font-semibold transition-colors hover:bg-white/15 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
+                                style={{ color: 'var(--text-primary)' }}
+                            >
+                                {cookieBusy ? <Loader2 size={14} className="animate-spin" /> : '用 Cookie 登录'}
+                            </button>
+                            {cookieMsg ? (
+                                <p className={`mt-2 text-[11px] leading-snug ${cookieMsg.ok ? 'opacity-70' : 'text-rose-400'}`}
+                                   style={cookieMsg.ok ? { color: 'var(--text-secondary)' } : undefined}>
+                                    {cookieMsg.text}
+                                </p>
+                            ) : null}
+                        </div>
+                    ) : null}
+                </div>
+            ) : null}
         </div>
     );
 };

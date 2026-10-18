@@ -131,6 +131,7 @@ const buildLoginModalProps = (
                 onSendSms: (mobile) => account.sendSmsCode(session.providerId, mobile),
                 onSmsLogin: (mobile, code, mobileTicket) =>
                     account.submitSmsLogin(session.providerId, mobile, code, mobileTicket),
+                onImportCookie: (cookieText) => account.importCookie(session.providerId, cookieText),
                 onSuccess: () => account.closeLogin(),
             }
             : undefined,

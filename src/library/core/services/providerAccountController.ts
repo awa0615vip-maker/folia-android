@@ -534,6 +534,25 @@ export const createProviderAccountController = (deps: LibraryAccountControllerDe
         }
     };
 
+    // ─── 粘贴 Cookie 登录（图形验证 / 短信风控兜底）────────────────────────
+
+    const importCookie = async (providerId: OnlineProviderId, cookieText: string) => {
+        if (disposed) return { ok: false, message: 'account controller disposed' };
+        try {
+            const result = await auth.importCookie(providerId, cookieText);
+            if (!result.ok) return result;
+            // 登录成功：刷新该平台账户，让头像 / 昵称立即进入快照。
+            try {
+                await providerAccounts.refresh(providerId);
+            } catch (error) {
+                log('warn', 'cookie-login:refresh-error', { providerId, ...describeLoginError(error) });
+            }
+            return result;
+        } catch (error) {
+            return { ok: false, message: describeError(error) };
+        }
+    };
+
     // ─── 寿命 ───────────────────────────────────────────────────────────
 
     const dispose = (): void => {
@@ -568,6 +587,7 @@ export const createProviderAccountController = (deps: LibraryAccountControllerDe
         buildLoginDiagnosticReport,
         sendSmsCode,
         submitSmsLogin,
+        importCookie,
         logout: logoutProvider,
         dispose,
     };

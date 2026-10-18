@@ -92,6 +92,7 @@ describe('providerLoginSession', () => {
             runQrLoginSelfCheck: vi.fn().mockResolvedValue(null),
             sendSmsCode: vi.fn().mockResolvedValue({ ok: true, message: 'ok' }),
             smsLogin: vi.fn().mockResolvedValue({ ok: true, message: 'ok' }),
+            importCookie: vi.fn().mockResolvedValue({ ok: true, message: 'ok' }),
         };
     });
 
@@ -585,6 +586,7 @@ describe('providerLoginSession · failures, serial requests, cooldown and self-c
             runQrLoginSelfCheck: vi.fn().mockResolvedValue(null),
             sendSmsCode: vi.fn().mockResolvedValue({ ok: true, message: 'ok' }),
             smsLogin: vi.fn().mockResolvedValue({ ok: true, message: 'ok' }),
+            importCookie: vi.fn().mockResolvedValue({ ok: true, message: 'ok' }),
         };
     });
 

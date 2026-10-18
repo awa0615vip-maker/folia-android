@@ -290,6 +290,12 @@ export interface LibraryAccountController {
         code: string,
         mobileTicket?: string,
     ): Promise<{ ok: boolean; message: string }>;
+    /** 粘贴 Cookie 登录（图形验证 / 短信风控兜底，仅本人账号）；成功后内部已刷新该平台账户。 */
+    importCookie(providerId: OnlineProviderId, cookieText: string): Promise<{
+        ok: boolean;
+        message: string;
+        matchedKeys?: string[];
+    }>;
     /** 只对当前且已登录的平台；走宿主注入的 per-provider logout。 */
     logout(providerId: OnlineProviderId): Promise<LibraryLogoutResult>;
     /** 宿主卸载：关闭登录会话（keyed 取消），待确认切换按 declined / disposed 结算。 */
@@ -327,6 +333,12 @@ export type LibraryAccountAuthPort = {
     smsLogin(providerId: OnlineProviderId, mobile: string, code: string, mobileTicket?: string): Promise<{
         ok: boolean;
         message: string;
+    }>;
+    /** 粘贴 Cookie 登录（图形验证 / 短信风控兜底，仅本人账号）。 */
+    importCookie(providerId: OnlineProviderId, cookieText: string): Promise<{
+        ok: boolean;
+        message: string;
+        matchedKeys?: string[];
     }>;
     getProviderCapabilities(providerId: OnlineProviderId): Pick<ProviderCapabilities, 'auth'>;
 };

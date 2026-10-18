@@ -55,6 +55,11 @@ type SmsLoginProps = {
         ok: boolean;
         message: string;
     }>;
+    /** 粘贴 Cookie 登录兜底（仅汽水）。 */
+    onImportCookie?: (cookieText: string) => Promise<{
+        ok: boolean;
+        message: string;
+    }>;
     /** 登录成功后：由上层关闭弹窗。 */
     onSuccess: () => void;
 };

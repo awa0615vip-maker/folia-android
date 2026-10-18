@@ -33,6 +33,8 @@ type LibraryTuiAccountLoginProps = {
     onSendSms: (mobile: string) => Promise<{ ok: boolean; message: string; mobileTicket?: string; retryAfterSec?: number }>;
     /** 汽水音乐：手机号 + 验证码登录。 */
     onSmsLogin: (mobile: string, code: string, mobileTicket?: string) => Promise<{ ok: boolean; message: string }>;
+    /** 汽水音乐：粘贴 Cookie 登录兜底（图形验证 / 短信风控）。 */
+    onImportCookie: (cookieText: string) => Promise<{ ok: boolean; message: string }>;
 };
 
 const LibraryTuiAccountLogin: React.FC<LibraryTuiAccountLoginProps> = ({
@@ -51,6 +53,7 @@ const LibraryTuiAccountLogin: React.FC<LibraryTuiAccountLoginProps> = ({
     onClose,
     onSendSms,
     onSmsLogin,
+    onImportCookie,
 }) => {
     const { t } = useTranslation();
     const { session, methodStep, backendFailure } = view;
@@ -101,7 +104,7 @@ const LibraryTuiAccountLogin: React.FC<LibraryTuiAccountLoginProps> = ({
 
             {isSms ? (
                 <div className="w-full py-2">
-                    <QishuiSmsLoginForm onSendSms={onSendSms} onSmsLogin={onSmsLogin} onSuccess={onClose} />
+                    <QishuiSmsLoginForm onSendSms={onSendSms} onSmsLogin={onSmsLogin} onImportCookie={onImportCookie} onSuccess={onClose} />
                 </div>
             ) : (
                 <>

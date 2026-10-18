@@ -221,6 +221,7 @@ const LibraryTuiAccount: React.FC<LibraryAccountSurfaceProps> = ({ account, them
                     onSendSms={mobile => account.sendSmsCode('qishui', mobile)}
                     onSmsLogin={(mobile, code, mobileTicket) =>
                         account.submitSmsLogin('qishui', mobile, code, mobileTicket)}
+                    onImportCookie={cookieText => account.importCookie('qishui', cookieText)}
                 />
             ) : null}
             {pendingSwitch ? (

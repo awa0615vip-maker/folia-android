@@ -13,6 +13,7 @@ import type { BravaisAccountForm } from './bravaisAccountModel';
 /** 表单里的动作（surface 给，身份稳定；每个都直接调账户 controller，不 await 它的事务）。 */
 export type BravaisSmsSendOutcome = { ok: boolean; message: string; mobileTicket?: string; retryAfterSec?: number };
 export type BravaisSmsLoginOutcome = { ok: boolean; message: string };
+export type BravaisCookieImportOutcome = { ok: boolean; message: string };
 
 export type BravaisAccountActions = {
     selectMethod: (methodId: string) => void;
@@ -26,6 +27,8 @@ export type BravaisAccountActions = {
     sendSms: (mobile: string) => Promise<BravaisSmsSendOutcome>;
     /** 汽水音乐：用手机号 + 验证码登录（mobileTicket 为风控回传时带上）。 */
     submitSms: (mobile: string, code: string, mobileTicket?: string) => Promise<BravaisSmsLoginOutcome>;
+    /** 汽水音乐：粘贴 Cookie 登录兜底（图形验证 / 短信风控）。 */
+    importCookie: (cookieText: string) => Promise<BravaisCookieImportOutcome>;
     close: () => void;
     confirm: (requestId: number) => void;
     cancel: (requestId: number) => void;

@@ -16,6 +16,7 @@ import {
     searchAll,
     sendSmsCode,
     smsLogin,
+    importQishuiCookie,
 } from './qishuiTransport';
 import { normalizeQishuiSong, normalizeQishuiUser, qishuiPage } from './qishuiNormalize';
 
@@ -180,5 +181,7 @@ export const qishuiProvider: OnlineMusicProvider = {
         },
         sendSmsCode: (mobile: string) => sendSmsCode(mobile),
         smsLogin: (mobile: string, code: string, mobileTicket?: string) => smsLogin(mobile, code, mobileTicket),
+        // 粘贴 Cookie 登录（图形验证 / 短信风控兜底，仅本人账号）。
+        importCookie: (cookieText: string) => importQishuiCookie(cookieText),
     },
 };

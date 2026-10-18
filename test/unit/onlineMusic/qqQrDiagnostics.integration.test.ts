@@ -59,6 +59,7 @@ const createSession = async () => {
         getProviderCapabilities: () => ({ auth: true }),
         sendSmsCode: async () => { throw new Error('sms unsupported on qq'); },
         smsLogin: async () => { throw new Error('sms unsupported on qq'); },
+        importCookie: async () => { throw new Error('cookie unsupported on qq'); },
     };
     const manual = createManualClock();
     const session = createProviderLoginSession({

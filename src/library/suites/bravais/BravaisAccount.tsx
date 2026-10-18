@@ -89,6 +89,8 @@ const BravaisAccount: React.FC<LibraryAccountSurfaceProps> = ({ account, isInter
         sendSms: mobile => accountRef.current.sendSmsCode('qishui', mobile),
         submitSms: (mobile, code, mobileTicket) =>
             accountRef.current.submitSmsLogin('qishui', mobile, code, mobileTicket),
+        // 汽水音乐：粘贴 Cookie 登录兜底（图形验证 / 短信风控）。
+        importCookie: (cookieText) => accountRef.current.importCookie('qishui', cookieText),
         close: () => void accountRef.current.closeLogin(),
         // 不 await：controller 同步清掉待确认请求，缝随之翻回；清理与刷新在后台走完。
         confirm: requestId => void accountRef.current.confirmSwitch(requestId),
