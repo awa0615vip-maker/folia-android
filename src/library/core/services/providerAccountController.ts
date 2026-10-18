@@ -502,6 +502,38 @@ export const createProviderAccountController = (deps: LibraryAccountControllerDe
         }
     };
 
+    // ─── 手机号 + 短信验证码登录 ─────────────────────────────────────────
+
+    const sendSmsCode = async (providerId: OnlineProviderId, mobile: string) => {
+        try {
+            return await auth.sendSmsCode(providerId, mobile);
+        } catch (error) {
+            return { ok: false, message: describeError(error) };
+        }
+    };
+
+    const submitSmsLogin = async (
+        providerId: OnlineProviderId,
+        mobile: string,
+        code: string,
+        mobileTicket?: string,
+    ) => {
+        if (disposed) return { ok: false, message: 'account controller disposed' };
+        try {
+            const result = await auth.smsLogin(providerId, mobile, code, mobileTicket);
+            if (!result.ok) return result;
+            // 登录成功：刷新该平台账户，让头像 / 昵称立即进入快照。
+            try {
+                await providerAccounts.refresh(providerId);
+            } catch (error) {
+                log('warn', 'sms-login:refresh-error', { providerId, ...describeLoginError(error) });
+            }
+            return result;
+        } catch (error) {
+            return { ok: false, message: describeError(error) };
+        }
+    };
+
     // ─── 寿命 ───────────────────────────────────────────────────────────
 
     const dispose = (): void => {
@@ -534,6 +566,8 @@ export const createProviderAccountController = (deps: LibraryAccountControllerDe
         closeLogin,
         restartLoginBackend,
         buildLoginDiagnosticReport,
+        sendSmsCode,
+        submitSmsLogin,
         logout: logoutProvider,
         dispose,
     };

@@ -279,6 +279,19 @@ export const omni = {
         return typeof ttlMs === 'number' && ttlMs > 0 ? ttlMs : null;
     },
 
+    // 手机号 + 短信验证码登录（目前仅汽水实现）。
+    async sendSmsCode(providerId: OmniProviderId, mobile: string) {
+        const auth = requireOnlineMusicProvider(providerId).auth;
+        if (!auth?.sendSmsCode) return unsupported(providerId, 'sms-login');
+        return auth.sendSmsCode(mobile);
+    },
+
+    async smsLogin(providerId: OmniProviderId, mobile: string, code: string, mobileTicket?: string) {
+        const auth = requireOnlineMusicProvider(providerId).auth;
+        if (!auth?.smsLogin) return unsupported(providerId, 'sms-login');
+        return auth.smsLogin(mobile, code, mobileTicket);
+    },
+
     async getUserPlaylists(userId: MediaId, page: PageInput): Promise<OmniPage<OmniCollection>> {
         return withActiveProvider(async provider => provider.library?.getUserPlaylists?.(userId, page.limit, page.offset) ?? emptyPage(page.offset));
     },

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { AlertTriangle, Check, ClipboardCopy, Loader2, RotateCcw, ServerCog, X } from 'lucide-react';
 import { motion } from 'framer-motion';
 import QrLoginFailureHelp, { type QrLoginFailureHelpProps } from './QrLoginFailureHelp';
+import QishuiSmsLoginForm from './QishuiSmsLoginForm';
 
 // src/library/suites/grid/account/OnlineProviderLoginModal.tsx
 // 扫码登录弹窗。平时是窄的单栏：二维码、状态行、重试 / 重启；登录失败后变成两栏，失败帮助（简单办法、自检、
@@ -42,6 +43,22 @@ type DiagnosticsEntryProps = {
     buildReport: () => Promise<string>;
 };
 
+// 手机号 + 短信验证码登录（仅汽水传入）。回调由上层接到 account controller。
+type SmsLoginProps = {
+    onSendSms: (mobile: string) => Promise<{
+        ok: boolean;
+        message: string;
+        mobileTicket?: string;
+        retryAfterSec?: number;
+    }>;
+    onSmsLogin: (mobile: string, code: string, mobileTicket?: string) => Promise<{
+        ok: boolean;
+        message: string;
+    }>;
+    /** 登录成功后：由上层关闭弹窗。 */
+    onSuccess: () => void;
+};
+
 type OnlineProviderLoginModalProps = {
     title: string;
     note: string;
@@ -60,6 +77,8 @@ type OnlineProviderLoginModalProps = {
     failureHelp?: QrLoginFailureHelpProps;
     onRetry: () => void;
     onClose: () => void;
+    /** 仅汽水传入：显示「扫码 / 手机号」切换，选手机号时渲染短信表单。 */
+    smsLogin?: SmsLoginProps;
 };
 
 const OnlineProviderLoginModal = ({
@@ -77,7 +96,9 @@ const OnlineProviderLoginModal = ({
     failureHelp,
     onRetry,
     onClose,
+    smsLogin,
 }: OnlineProviderLoginModalProps) => {
+    const [loginMode, setLoginMode] = useState<'qr' | 'sms'>('qr');
     const [diagCopyState, setDiagCopyState] = useState<'idle' | 'working' | 'copied' | 'failed'>('idle');
     const copyDiagnostics = async () => {
         if (!diagnosticsEntry) return;
@@ -99,9 +120,11 @@ const OnlineProviderLoginModal = ({
 
     // 步骤一：还没选登录方式，二维码区显示占位框，且不会向后端发出任何请求。
     const awaitingMethod = Boolean(loginMethods) && loginMethods?.selectedId == null;
+    // 手机号模式（仅汽水）：二维码区整体换成短信表单，扫码失败帮助也一并隐藏。
+    const isSmsMode = Boolean(smsLogin) && loginMode === 'sms';
     // 后端故障优先于其余所有状态：这时候刷新二维码没有意义。
-    const canRetry = (state === 'expired' || state === 'error') && !awaitingMethod && !backendFailure;
-    const twoColumns = Boolean(failureHelp);
+    const canRetry = (state === 'expired' || state === 'error') && !awaitingMethod && !backendFailure && !isSmsMode;
+    const twoColumns = Boolean(failureHelp) && !isSmsMode;
     return (
         <motion.div
             initial={{ opacity: 0 }}
@@ -131,7 +154,29 @@ const OnlineProviderLoginModal = ({
                     <X size={16} />
                 </button>
                 <h3 className="text-lg font-bold mb-6" style={{ color: 'var(--text-primary)' }}>{title}</h3>
-                {loginMethods && (
+                {smsLogin && (
+                    <div className="mb-5 flex items-center justify-center gap-1 rounded-full border border-white/10 bg-white/5 p-1">
+                        <button
+                            type="button"
+                            onClick={() => setLoginMode('qr')}
+                            aria-pressed={loginMode === 'qr'}
+                            className={`flex-1 rounded-full px-4 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${loginMode === 'qr' ? 'bg-white/15' : 'opacity-50'}`}
+                            style={{ color: 'var(--text-primary)' }}
+                        >
+                            扫码登录
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setLoginMode('sms')}
+                            aria-pressed={loginMode === 'sms'}
+                            className={`flex-1 rounded-full px-4 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${loginMode === 'sms' ? 'bg-white/15' : 'opacity-50'}`}
+                            style={{ color: 'var(--text-primary)' }}
+                        >
+                            手机号登录
+                        </button>
+                    </div>
+                )}
+                {loginMethods && !isSmsMode && (
                     <div className="mb-5">
                         <p className="text-[10px] font-semibold uppercase tracking-[0.16em] opacity-45 mb-1.5" style={{ color: 'var(--text-secondary)' }}>
                             {loginMethods.title}
@@ -165,6 +210,11 @@ const OnlineProviderLoginModal = ({
                         </div>
                     </div>
                 )}
+                {isSmsMode && smsLogin ? (
+                    <div className="w-full">
+                        <QishuiSmsLoginForm {...smsLogin} />
+                    </div>
+                ) : (
                 <div className={twoColumns ? 'flex flex-col items-center gap-6 sm:flex-row sm:items-start' : 'flex flex-col items-center'}>
                     {/* 左栏：二维码（或后端故障原因）、状态行、重启 / 重试。 */}
                     <div className={`flex flex-col items-center ${twoColumns ? 'w-full sm:w-48 sm:shrink-0' : ''}`}>
@@ -245,6 +295,7 @@ const OnlineProviderLoginModal = ({
                         </div>
                     )}
                 </div>
+                )}
                 <p className="text-[10px] opacity-30 mt-6" style={{ color: 'var(--text-secondary)' }}>{note}</p>
             </motion.div>
         </motion.div>

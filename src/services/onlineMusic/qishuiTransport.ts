@@ -19,8 +19,13 @@ import {
     QISHUI_UA,
     pcQuery,
     passportHeaders,
+    passportHeadersWithCsrf,
     passportQuery,
     buildCheckQrBody,
+    buildSendSmsBody,
+    buildSmsLoginBody,
+    smsPassportQuery,
+    explainSmsSendError,
     SESSION_COOKIE_KEYS,
 } from './qishuiConstants';
 import { coverFromUrlCover } from './qishuiNormalize';
@@ -429,6 +434,113 @@ export async function pollQrLogin(token: string): Promise<QishuiQrState> {
 /** 释放一把二维码会话（关登录窗时 fire-and-forget；未知 / 过期 token 也算成功）。 */
 export function cancelQrLogin(token: string): void {
     qrPending.delete(token);
+}
+
+// ─── 手机号 + 短信验证码登录（passport web SMS）──────────────────────────
+
+export interface SmsSendResult {
+    ok: boolean;
+    message: string;
+    /** 风控返回的 mobile_ticket，需在 sms_login 时回传。 */
+    mobileTicket?: string;
+    /** 限流时建议的冷却秒数。 */
+    retryAfterSec?: number;
+}
+
+/** 校验并归一化为 11 位大陆手机号。 */
+function normalizeMobile(mobile: string): string {
+    const m = mobile.replace(/\D/g, '');
+    if (!/^1\d{10}$/.test(m)) {
+        throw new Error('手机号需为 11 位中国大陆号码');
+    }
+    return m;
+}
+
+/** 从会话 cookie 取 passport CSRF token。 */
+function csrfFromJar(jar: CookieMap): string | undefined {
+    return jar.passport_csrf_token || jar.passport_csrf_token_default;
+}
+
+/** 确保会话里有 passport_csrf_token（借 get_qrcode 预热），预热后清掉临时二维码会话。 */
+async function warmPassportCsrf(): Promise<void> {
+    if (csrfFromJar(loadCookieMap())) return;
+    try {
+        const qr = await createQrLogin();
+        cancelQrLogin(qr.token);
+    } catch {
+        /* warm 失败不阻断：send_code 仍可能成功 */
+    }
+}
+
+/**
+ * 发送短信验证码：POST /passport/web/send_code/。
+ * 1204 风控会返回 mobile_ticket 但不真正下发短信。
+ */
+export async function sendSmsCode(mobile: string): Promise<SmsSendResult> {
+    const m = normalizeMobile(mobile);
+    await warmPassportCsrf();
+    const jar = loadCookieMap();
+    const url = `${QISHUI_API}/passport/web/send_code/?${smsPassportQuery()}`;
+    const response = await qishuiFetch(url, {
+        method: 'POST',
+        form: buildSendSmsBody(m),
+        extraHeaders: passportHeadersWithCsrf(cookieHeaderFromMap(jar), csrfFromJar(jar)),
+        cookieOverride: jar,
+        timeoutMs: 20_000,
+    });
+    const payload: any = await response.json().catch(() => null);
+    const data = payload?.data ?? {};
+    const errorCode = Number(data.error_code ?? 0);
+    const desc = String(data.description || payload?.message || '');
+
+    if (payload?.message === 'success' || errorCode === 0) {
+        return { ok: true, message: desc || '验证码已发送（请查收短信）', mobileTicket: data.mobile_ticket };
+    }
+    return {
+        ok: false,
+        message: explainSmsSendError(errorCode, desc),
+        mobileTicket: data.mobile_ticket,
+        retryAfterSec: errorCode === 7 || errorCode === 2156 ? 90 : undefined,
+    };
+}
+
+/**
+ * 手机号 + 验证码登录：POST /passport/web/sms_login/，成功后会话 cookie 已持久化。
+ */
+export async function smsLogin(
+    mobile: string,
+    code: string,
+    mobileTicket?: string,
+): Promise<{ ok: boolean; message: string }> {
+    const m = normalizeMobile(mobile);
+    const c = code.replace(/\D/g, '');
+    if (c.length < 4 || c.length > 8) {
+        throw new Error('验证码格式不正确');
+    }
+    await warmPassportCsrf();
+    const jar = loadCookieMap();
+    const url = `${QISHUI_API}/passport/web/sms_login/?${smsPassportQuery()}`;
+    const response = await qishuiFetch(url, {
+        method: 'POST',
+        form: buildSmsLoginBody(m, c, mobileTicket),
+        extraHeaders: passportHeadersWithCsrf(cookieHeaderFromMap(jar), csrfFromJar(jar)),
+        cookieOverride: jar,
+        timeoutMs: 20_000,
+    });
+    // Set-Cookie 已由 qishuiFetch 收进全局；再从 JSON 补 session 字段。
+    const payload: any = await response.json().catch(() => null);
+    const data = payload?.data ?? {};
+    const nextJar = mergeCookieMaps(loadCookieMap());
+    for (const key of SESSION_COOKIE_KEYS) {
+        const v = data[key] ?? payload?.[key];
+        if (typeof v === 'string' && v) nextJar[key] = v;
+    }
+    saveCookieMap(nextJar);
+    if (hasLoginSession(nextJar)) return { ok: true, message: '登录成功' };
+
+    const errorCode = Number(data.error_code ?? 0);
+    const desc = String(data.description || payload?.message || '登录失败');
+    return { ok: false, message: desc + (errorCode ? ` (${errorCode})` : '') };
 }
 
 // ─── 个人信息（登录态自检）────────────────────────────────────────────────

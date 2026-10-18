@@ -14,6 +14,8 @@ import {
     pollQrLogin,
     resultGroup,
     searchAll,
+    sendSmsCode,
+    smsLogin,
 } from './qishuiTransport';
 import { normalizeQishuiSong, normalizeQishuiUser, qishuiPage } from './qishuiNormalize';
 
@@ -171,5 +173,7 @@ export const qishuiProvider: OnlineMusicProvider = {
         async getQrLoginDiagnostics() {
             return getQrCheckDiagnosticLines();
         },
+        sendSmsCode: (mobile: string) => sendSmsCode(mobile),
+        smsLogin: (mobile: string, code: string, mobileTicket?: string) => smsLogin(mobile, code, mobileTicket),
     },
 };

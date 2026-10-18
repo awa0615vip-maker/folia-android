@@ -435,6 +435,15 @@ export interface OnlineAuthProvider {
     // canRunQrLoginSelfCheck 同步回答此刻能不能检查（界面据此决定要不要显示「正在检查」）。
     canRunQrLoginSelfCheck?(): boolean;
     runQrLoginSelfCheck?(): Promise<LoginSelfCheckResult | null>;
+    // 手机号 + 短信验证码登录（仅支持该方式的 provider 实现，如汽水）。
+    // sendSmsCode 请求下发短信；smsLogin 用验证码换登录态。登录成功后 getLoginStatus 应返回用户。
+    sendSmsCode?(mobile: string): Promise<{
+        ok: boolean;
+        message: string;
+        mobileTicket?: string;
+        retryAfterSec?: number;
+    }>;
+    smsLogin?(mobile: string, code: string, mobileTicket?: string): Promise<{ ok: boolean; message: string }>;
 }
 
 export interface OnlineLibraryProvider {

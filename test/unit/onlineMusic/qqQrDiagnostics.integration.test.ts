@@ -57,6 +57,8 @@ const createSession = async () => {
         canRunQrLoginSelfCheck: () => false,
         runQrLoginSelfCheck: async () => null,
         getProviderCapabilities: () => ({ auth: true }),
+        sendSmsCode: async () => { throw new Error('sms unsupported on qq'); },
+        smsLogin: async () => { throw new Error('sms unsupported on qq'); },
     };
     const manual = createManualClock();
     const session = createProviderLoginSession({

@@ -201,6 +201,8 @@ beforeEach(() => {
         getQrLoginDiagnostics: vi.fn().mockResolvedValue(['runtime: test']),
         canRunQrLoginSelfCheck: vi.fn().mockReturnValue(false),
         runQrLoginSelfCheck: vi.fn().mockResolvedValue(null),
+        sendSmsCode: vi.fn().mockResolvedValue({ ok: true, message: 'ok' }),
+        smsLogin: vi.fn().mockResolvedValue({ ok: true, message: 'ok' }),
     };
     // 刷新成功即视为拿到了登录态（真实刷新器会把账户写进 store）。
     refresh = vi.fn<LibraryProviderAccountPort['refresh']>(async (providerId: OnlineProviderId) => {

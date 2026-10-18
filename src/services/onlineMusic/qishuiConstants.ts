@@ -102,3 +102,72 @@ export function passportHeaders(cookie?: string): Record<string, string> {
 }
 
 export const SESSION_COOKIE_KEYS = ['sessionid', 'sessionid_ss', 'sid_tt', 'sid_guard'] as const;
+
+// ─── 短信验证码登录（passport web SMS）────────────────────────────────────
+
+/**
+ * 短信 passport 接口 query（send_code / sms_login 通用），对齐 PC 网页版账号 SDK。
+ */
+export function smsPassportQuery(): string {
+    const params = new URLSearchParams({
+        aid: QISHUI_AID,
+        app_name: QISHUI_APP_NAME,
+        passport_jssdk_version: QISHUI_PASSPORT_JSSDK_VERSION,
+        passport_jssdk_type: 'normal',
+        is_from_ttaccountsdk: '1',
+        account_sdk_source: 'web',
+        is_new_login: '1',
+        device_id: DEFAULT_DEVICE_ID,
+        install_id: DEFAULT_IID,
+        did: DEFAULT_DEVICE_ID,
+        iid: DEFAULT_IID,
+        device_platform: 'windows',
+        version_code: QISHUI_VERSION_CODE,
+        channel: 'official',
+    });
+    return params.toString();
+}
+
+/** send_code 请求体（urlencoded）。 */
+export function buildSendSmsBody(mobile: string): string {
+    const pairs: Array<[string, string]> = [
+        ['mix_mode', '1'],
+        ['mobile', mobile],
+        ['type', '24'],
+        ['is6Digits', '1'],
+        ['fixed_mix_mode', '1'],
+    ];
+    return pairs.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
+}
+
+/** sms_login 请求体（urlencoded）；mobile_ticket 仅在风控返回时回传。 */
+export function buildSmsLoginBody(mobile: string, code: string, mobileTicket?: string): string {
+    const pairs: Array<[string, string]> = [
+        ['mix_mode', '1'],
+        ['mobile', mobile],
+        ['code', code],
+        ['is6Digits', '1'],
+        ['fixed_mix_mode', '1'],
+    ];
+    if (mobileTicket) pairs.push(['mobile_ticket', mobileTicket]);
+    return pairs.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
+}
+
+/** passport 请求头，带上 CSRF token（会话 cookie 里的 passport_csrf_token）。 */
+export function passportHeadersWithCsrf(cookie?: string, csrf?: string): Record<string, string> {
+    const headers = passportHeaders(cookie);
+    if (csrf) headers['x-tt-passport-csrf-token'] = csrf;
+    return headers;
+}
+
+/** 把 send_code 错误码翻译成中文可操作说明。 */
+export function explainSmsSendError(errorCode: number, desc?: string): string {
+    switch (errorCode) {
+        case 1204: return `${desc || '验证码请求错误'} (1204)：平台风控，可能需要图形验证，短信未真正下发。请稍后再试。`;
+        case 7: return `${desc || '访问太频繁'} (7)：请等待 1~2 分钟再点获取验证码。`;
+        case 1003: return `${desc || '手机号错误'} (1003)：请检查是否为 11 位大陆手机号。`;
+        case 1049: return `${desc || '应用版本过低'} (1049)：客户端指纹被拒。`;
+        case 2156: return `${desc || '系统繁忙'} (2156)：请稍后重试。`;
+        default: return desc || `send_code error_code=${errorCode}`;
+    }
+}

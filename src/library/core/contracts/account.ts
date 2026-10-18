@@ -276,6 +276,20 @@ export interface LibraryAccountController {
     /** 只在 backend.canRestart 时；恢复运行后自动要码。 */
     restartLoginBackend(): Promise<LibraryBackendRestartResult>;
     buildLoginDiagnosticReport(): Promise<LibraryLoginDiagnosticResult>;
+    /** 手机号登录：请求下发短信验证码（目前仅汽水支持）。 */
+    sendSmsCode(providerId: OnlineProviderId, mobile: string): Promise<{
+        ok: boolean;
+        message: string;
+        mobileTicket?: string;
+        retryAfterSec?: number;
+    }>;
+    /** 手机号登录：用验证码换登录态；成功后内部已刷新该平台账户。 */
+    submitSmsLogin(
+        providerId: OnlineProviderId,
+        mobile: string,
+        code: string,
+        mobileTicket?: string,
+    ): Promise<{ ok: boolean; message: string }>;
     /** 只对当前且已登录的平台；走宿主注入的 per-provider logout。 */
     logout(providerId: OnlineProviderId): Promise<LibraryLogoutResult>;
     /** 宿主卸载：关闭登录会话（keyed 取消），待确认切换按 declined / disposed 结算。 */
@@ -303,6 +317,17 @@ export type LibraryAccountAuthPort = {
     canRunQrLoginSelfCheck(providerId: OnlineProviderId): boolean;
     /** 主动自检；没有可检查的对象时 resolve null，自检本身出错时 reject。 */
     runQrLoginSelfCheck(providerId: OnlineProviderId): Promise<LoginSelfCheckResult | null>;
+    /** 手机号 + 短信验证码登录（目前仅汽水支持，其余端口实现应抛 unsupported）。 */
+    sendSmsCode(providerId: OnlineProviderId, mobile: string): Promise<{
+        ok: boolean;
+        message: string;
+        mobileTicket?: string;
+        retryAfterSec?: number;
+    }>;
+    smsLogin(providerId: OnlineProviderId, mobile: string, code: string, mobileTicket?: string): Promise<{
+        ok: boolean;
+        message: string;
+    }>;
     getProviderCapabilities(providerId: OnlineProviderId): Pick<ProviderCapabilities, 'auth'>;
 };
 

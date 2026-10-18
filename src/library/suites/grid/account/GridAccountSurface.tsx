@@ -125,6 +125,15 @@ const buildLoginModalProps = (
             : undefined,
         onRetry: () => void account.retryLogin(),
         onClose: () => void account.closeLogin(),
+        // 汽水音乐：额外提供手机号 + 短信验证码登录（扫码确认在 WebView 内不稳定，作为主路径）。
+        smsLogin: session.providerId === 'qishui'
+            ? {
+                onSendSms: (mobile) => account.sendSmsCode(session.providerId, mobile),
+                onSmsLogin: (mobile, code, mobileTicket) =>
+                    account.submitSmsLogin(session.providerId, mobile, code, mobileTicket),
+                onSuccess: () => account.closeLogin(),
+            }
+            : undefined,
     };
 };
 
