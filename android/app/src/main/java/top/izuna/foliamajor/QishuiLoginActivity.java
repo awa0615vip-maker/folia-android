@@ -34,6 +34,8 @@ import java.util.Map;
 public class QishuiLoginActivity extends Activity {
     public static final String EXTRA_URL = "url";
     public static final String EXTRA_COOKIE = "cookie";
+    public static final String EXTRA_FINAL_URL = "final_url";
+    public static final String EXTRA_COOKIE_KEYS = "cookie_keys";
     public static final String DEFAULT_URL = "https://bubble.qishui.com/login";
 
     // 与前端 qishuiConstants.SESSION_COOKIE_KEYS 保持一致，命中任意一个即视为已登录。
@@ -214,8 +216,23 @@ public class QishuiLoginActivity extends Activity {
             CookieManager.getInstance().flush();
         } catch (Exception ignored) {
         }
+        // flush 后可能补齐 sid_guard 等，再收集一次最新 Cookie，保证回传的 cookie 与键名一致。
+        LinkedHashMap<String, String> latest = collectCookieMap();
+        String finalCookie = (cookie != null && !cookie.isEmpty()) ? cookie : buildCookieHeader(latest);
+        StringBuilder keys = new StringBuilder();
+        for (String key : latest.keySet()) {
+            if (keys.length() > 0) keys.append(',');
+            keys.append(key);
+        }
+        String currentUrl = "";
+        try {
+            if (webView != null && webView.getUrl() != null) currentUrl = webView.getUrl();
+        } catch (Exception ignored) {
+        }
         Intent data = new Intent();
-        data.putExtra(EXTRA_COOKIE, cookie == null ? "" : cookie);
+        data.putExtra(EXTRA_COOKIE, finalCookie == null ? "" : finalCookie);
+        data.putExtra(EXTRA_FINAL_URL, currentUrl);
+        data.putExtra(EXTRA_COOKIE_KEYS, keys.toString());
         setResult(Activity.RESULT_OK, data);
         finish();
     }

@@ -445,7 +445,7 @@ export interface OnlineAuthProvider {
     }>;
     smsLogin?(mobile: string, code: string, mobileTicket?: string): Promise<{ ok: boolean; message: string }>;
     // 粘贴 Cookie 登录（图形验证 / 短信风控兜底，仅本人账号）。成功返回 ok，已建立会话。
-    importCookie?(cookieText: string): Promise<{ ok: boolean; message: string; matchedKeys?: string[] }>;
+    importCookie?(cookieText: string): Promise<{ ok: boolean; message: string; matchedKeys?: string[]; diagnostic?: string }>;
 }
 
 export interface OnlineLibraryProvider {

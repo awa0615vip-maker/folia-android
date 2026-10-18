@@ -758,9 +758,13 @@ public class FoliaNativePlugin extends Plugin {
             return;
         }
         String cookie = data.getStringExtra(QishuiLoginActivity.EXTRA_COOKIE);
+        String finalUrl = data.getStringExtra(QishuiLoginActivity.EXTRA_FINAL_URL);
+        String cookieKeys = data.getStringExtra(QishuiLoginActivity.EXTRA_COOKIE_KEYS);
         JSObject result = new JSObject();
         result.put("cancelled", false);
         result.put("cookie", cookie == null ? "" : cookie);
+        result.put("url", finalUrl == null ? "" : finalUrl);
+        result.put("cookieKeys", cookieKeys == null ? "" : cookieKeys);
         call.resolve(result);
     }
 

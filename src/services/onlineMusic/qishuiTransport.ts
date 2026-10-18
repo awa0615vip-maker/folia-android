@@ -615,12 +615,19 @@ export async function smsLogin(
 export async function getProfile(): Promise<ProviderUser | null> {
     if (!hasLoginSession(loadCookieMap())) return null;
     const url = `${QISHUI_API}/luna/pc/me?${pcQuery()}`;
-    const data = await qishuiJson<any>(url);
-    if (data.status_code && data.status_code !== 0) {
-        clearQishuiSession();
+    // 注意：这里绝不因为一次 me 失败（风控 / aid 不匹配 / 空响应 / 网络抖动）就清空刚导入的会话。
+    // 网页扫码登录刚导入的 Cookie 可能需要一拍才在服务端生效；清空会让用户反复登录失败。
+    let data: any;
+    try {
+        data = await qishuiJson<any>(url);
+    } catch {
         return null;
     }
-    const me = data.my_info ?? data.user ?? data;
+    if (data.status_code && data.status_code !== 0) {
+        // 业务层未授权（如会话不属于 luna_pc）：保留会话，仅返回 null，由显式登出清理。
+        return null;
+    }
+    const me = data.my_info ?? data.user ?? data.data ?? data;
     const id = String(me.id ?? me.user_id ?? '');
     if (!id) return null;
     return {
@@ -641,6 +648,8 @@ export async function importQishuiCookie(rawCookieText: string): Promise<{
     ok: boolean;
     message: string;
     matchedKeys?: string[];
+    /** 供真机排查的诊断串（Cookie 键名 + me 接口原始响应），不含 Cookie 值。 */
+    diagnostic?: string;
 }> {
     const text = String(rawCookieText ?? '').trim();
     if (!text) return { ok: false, message: 'Cookie 为空，请把抓到的完整 Cookie 粘贴进来' };
@@ -658,6 +667,7 @@ export async function importQishuiCookie(rawCookieText: string): Promise<{
         return {
             ok: false,
             message: `识别到 ${Object.keys(incoming).length} 个字段，但没有会话字段（${SESSION_COOKIE_KEYS.join(' / ')}）。请抓 api.qishui.com 域名下、且已登录的请求。`,
+            diagnostic: `识别到的Cookie键: ${Object.keys(incoming).join(',')}`,
         };
     }
 
@@ -665,22 +675,50 @@ export async function importQishuiCookie(rawCookieText: string): Promise<{
     const merged = mergeCookieMaps(loadCookieMap(), incoming);
     saveCookieMap(merged);
 
-    // 轻量自检（不清空会话）：能拉到 me 就给昵称，拉不到也保留 Cookie。
+    // 直接用原始请求探 me（不经过 qishuiJson 的错误归一化），拿到 HTTP 状态 / status_code / body 片段，
+    // 这样当会话属于音乐人平台或别的 aid 时，能一眼看出 luna_pc 为什么不认。
     let nickname = '';
+    let meLines: string[] = [];
     try {
-        const data = await qishuiJson<any>(`${QISHUI_API}/luna/pc/me?${pcQuery()}`);
-        const me = data?.my_info ?? data?.user ?? data?.data ?? null;
-        if (me && (me.id ?? me.user_id)) {
-            nickname = String(me.nickname ?? me.public_name ?? me.user_id ?? '');
+        const resp = await qishuiFetch(`${QISHUI_API}/luna/pc/me?${pcQuery()}`);
+        const raw = await resp.text().catch(() => '');
+        let parsed: any = null;
+        try {
+            parsed = raw ? JSON.parse(raw) : null;
+        } catch {
+            /* 非 JSON 响应，原样保留片段 */
         }
-    } catch {
-        /* 自检失败不阻断，保留已导入的 Cookie */
+        const code = parsed?.status_code;
+        const statusMsg = parsed?.status_info?.status_msg ?? parsed?.message ?? parsed?.description ?? '';
+        const me = parsed?.my_info ?? parsed?.user ?? parsed?.data ?? null;
+        const id = me ? (me.id ?? me.user_id) : null;
+        if (id) {
+            nickname = String(me.nickname ?? me.public_name ?? me.user_id ?? id);
+        }
+        meLines = [
+            `me HTTP ${resp.status}`,
+            `status_code=${code ?? '(无)'}`,
+            statusMsg ? `msg=${String(statusMsg)}` : '',
+            id ? `id=${id} 昵称=${nickname}` : 'me 未含用户字段',
+            `body=${raw.slice(0, 200)}`,
+        ].filter(Boolean);
+    } catch (error) {
+        meLines = [`me 请求失败: ${error instanceof Error ? error.message : String(error)}`];
     }
+
+    const diagnostic = [
+        `会话键: ${sessionKeys.join(',')}`,
+        `全部Cookie键: ${Object.keys(merged).join(',')}`,
+        ...meLines,
+    ].join('\n');
 
     return {
         ok: true,
-        message: nickname ? `登录成功：${nickname}` : '已保存会话 Cookie（识别到 ' + sessionKeys.join('、') + '），请返回看能否加载你的音乐。',
+        message: nickname
+            ? `登录成功：${nickname}`
+            : `已保存会话 Cookie（识别到 ${sessionKeys.join('、')}），但 luna_pc 没读到账号资料，请看下方诊断截图发我。`,
         matchedKeys: sessionKeys.slice() as string[],
+        diagnostic,
     };
 }
 

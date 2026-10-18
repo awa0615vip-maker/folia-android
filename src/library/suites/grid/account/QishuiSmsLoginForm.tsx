@@ -14,7 +14,7 @@ type SmsSendOutcome = {
 };
 
 type SmsLoginOutcome = { ok: boolean; message: string };
-type CookieImportOutcome = { ok: boolean; message: string };
+type CookieImportOutcome = { ok: boolean; message: string; diagnostic?: string };
 
 type QishuiSmsLoginFormProps = {
     onSendSms: (mobile: string) => Promise<SmsSendOutcome>;
@@ -159,15 +159,25 @@ const QishuiSmsLoginForm = ({ onSendSms, onSmsLogin, onImportCookie, onSuccess }
         setCookieMsg(null);
         setWebBusy(true);
         try {
-            const { cancelled, cookie } = await openQishuiWebLogin();
+            const { cancelled, cookie, url: landedUrl, cookieKeys: webCookieKeys } = await openQishuiWebLogin();
             if (cancelled || !cookie.trim()) return;
             const result = await onImportCookie(cookie);
+            // 把落地页、网页 Cookie 键、luna_pc 的 me 自检结果全部展示，方便截图定位。
+            const text = [
+                result.message,
+                landedUrl ? `网页落地页: ${landedUrl}` : '',
+                webCookieKeys ? `网页读到的Cookie键: ${webCookieKeys}` : '',
+                result.diagnostic ? `【服务端自检】\n${result.diagnostic}` : '',
+            ].filter(Boolean).join('\n');
             if (!result.ok) {
-                setCookieMsg({ ok: false, text: result.message });
+                setCookieMsg({ ok: false, text });
                 return;
             }
-            setCookieMsg({ ok: true, text: result.message });
-            onSuccess();
+            setCookieMsg({ ok: true, text });
+            // 只有真正读到账号昵称才算完全登录，才自动关窗；否则保留窗口显示诊断，供截图反馈。
+            if (result.message.startsWith('登录成功：')) {
+                onSuccess();
+            }
         } catch (e) {
             setCookieMsg({ ok: false, text: e instanceof Error ? e.message : '网页登录失败，请重试' });
         } finally {
@@ -301,10 +311,32 @@ const QishuiSmsLoginForm = ({ onSendSms, onSmsLogin, onImportCookie, onSuccess }
                                 {cookieBusy ? <Loader2 size={14} className="animate-spin" /> : '用 Cookie 登录'}
                             </button>
                             {cookieMsg ? (
-                                <p className={`mt-2 text-[11px] leading-snug ${cookieMsg.ok ? 'opacity-70' : 'text-rose-400'}`}
-                                   style={cookieMsg.ok ? { color: 'var(--text-secondary)' } : undefined}>
-                                    {cookieMsg.text}
-                                </p>
+                                <div className="mt-2">
+                                    <p className={`text-[11px] leading-snug ${cookieMsg.ok ? 'opacity-90' : 'text-rose-400'}`}
+                                       style={{
+                                           color: cookieMsg.ok ? 'var(--text-secondary)' : undefined,
+                                           whiteSpace: 'pre-wrap',
+                                           wordBreak: 'break-all',
+                                           maxHeight: 240,
+                                           overflowY: 'auto',
+                                           background: 'rgba(255,255,255,0.04)',
+                                           border: '1px solid rgba(255,255,255,0.08)',
+                                           borderRadius: 10,
+                                           padding: '8px 10px',
+                                           WebkitUserSelect: 'text',
+                                           userSelect: 'text',
+                                       }}>
+                                        {cookieMsg.text}
+                                    </p>
+                                    <button
+                                        type="button"
+                                        onClick={() => { try { navigator.clipboard?.writeText(cookieMsg.text); } catch { /* 忽略 */ } }}
+                                        className="mt-1 text-[10px] underline opacity-70 cursor-pointer"
+                                        style={{ color: 'var(--text-secondary)' }}
+                                    >
+                                        复制诊断（发给豆包）
+                                    </button>
+                                </div>
                             ) : null}
                         </div>
                     ) : null}

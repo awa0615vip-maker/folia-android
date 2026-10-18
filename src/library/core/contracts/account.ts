@@ -295,6 +295,7 @@ export interface LibraryAccountController {
         ok: boolean;
         message: string;
         matchedKeys?: string[];
+        diagnostic?: string;
     }>;
     /** 只对当前且已登录的平台；走宿主注入的 per-provider logout。 */
     logout(providerId: OnlineProviderId): Promise<LibraryLogoutResult>;
@@ -339,6 +340,7 @@ export type LibraryAccountAuthPort = {
         ok: boolean;
         message: string;
         matchedKeys?: string[];
+        diagnostic?: string;
     }>;
     getProviderCapabilities(providerId: OnlineProviderId): Pick<ProviderCapabilities, 'auth'>;
 };
