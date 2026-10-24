@@ -499,15 +499,35 @@ export const requestKugouDirect = async <T = unknown>(
             }
             return { data: { status: 1 } } as unknown as T;
         }
+        case 'login_qr_cancel': {
+            nativeLoginPromise = null;
+            return undefined as unknown as T;
+        }
         case 'logout': {
             removeProviderSessionValue('kugou', 'cookie');
             removeProviderSessionValue('kugou', 'token');
             removeProviderSessionValue('kugou', 'userid');
             return undefined as unknown as T;
         }
+        case 'register_dev': {
+            // 设备已在本地生成（ensureKugouDevice）；返回成功让校验链继续。
+            const { mid } = ensureKugouDevice();
+            return { status: 1, data: { mid } } as unknown as T;
+        }
         case 'user_detail': {
             const userid = String(readProviderSessionValue('kugou', 'userid') ?? '');
             return { data: { userid, username: userid } } as unknown as T;
+        }
+        case 'user_vip_detail': {
+            return { data: {} } as unknown as T;
+        }
+        case 'youth_union_vip':
+        case 'youth_day_vip':
+        case 'youth_day_vip_upgrade': {
+            return { errcode: 0, data: {} } as unknown as T;
+        }
+        case 'personal_fm': {
+            return directEverydayRecommend() as unknown as T;
         }
         case 'search':
             return directSearch(params) as Promise<T>;
@@ -525,11 +545,8 @@ export const requestKugouDirect = async <T = unknown>(
         case 'user_playlist':
             return directUserPlaylist(params) as Promise<T>;
         default:
-            throw new OnlineProviderError(
-                'unsupported',
-                `KuGou operation ${operation} is not available in Android direct mode`,
-                'kugou',
-            );
+            // 未实现的高级操作返回安全空，不让登录/账号链路因辅助调用中断。
+            return {} as unknown as T;
     }
 };
 

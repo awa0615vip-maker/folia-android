@@ -205,6 +205,17 @@ export const requestQqDirect = async (
             }
             return { code: 801 };
         }
+        case 'login_qr_cancel': {
+            nativeLoginPromise = null;
+            return undefined;
+        }
+        case 'login_channels': {
+            // 直连模式始终提供两个通道：QQ 扫码 + 微信扫码（与上游默认一致）。
+            return { data: { channels: ['qq', 'wechat'] } };
+        }
+        case 'login_refresh': {
+            return { data: {} };
+        }
         case 'login_status': {
             const uin = readQqSessionUin();
             if (!uin) return { data: { profile: null } };
@@ -220,10 +231,8 @@ export const requestQqDirect = async (
         case 'music_play':
             return qqDirectPlay(params);
         default:
-            throw new OnlineProviderError(
-                'unsupported',
-                `QQ operation ${operation} is not available in Android direct mode`,
-                'qq',
-            );
+            // 未实现的高级操作返回安全空，不让登录/账号链路因辅助调用中断。
+            return {};
+        
     }
 };
