@@ -28,3 +28,31 @@
     .lattice-lyrics { top: 160px; bottom: 164px; }
     .lattice-root .lattice-poster.is-expanded .lattice-lyric-metadata { top: 112px; right: 32px; }
 }
+
+/* WebGL 画布未就绪时的纯文本歌词降级（安卓 WebView 偶发 WebGL 失败，避免全黑）。 */
+.lattice-lyrics-fallback {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 6px;
+    overflow: hidden;
+    padding: 12px 4px 8px;
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 78%, transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 78%, transparent 100%);
+}
+.lattice-lyrics-fallback span {
+    display: block;
+    font-size: 15px;
+    line-height: 1.45;
+    font-weight: 500;
+    opacity: 0.42;
+    transition: opacity 0.2s ease;
+    text-shadow: 0 1px 3px rgb(0 0 0 / 0.45);
+}
+.lattice-lyrics-fallback span.is-current {
+    opacity: 1;
+    color: var(--text-accent);
+    font-size: 17px;
+}

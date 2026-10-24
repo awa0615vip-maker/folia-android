@@ -1337,7 +1337,10 @@ export default function App() {
 
     // 原生播放器方案（设置里可选）：声音改由原生 MediaPlayer 输出，WebView 端静音保活，
     // 队列/歌词/进度/自动切歌照常由 audio 元素事件流驱动；本地歌自动回退原版播放。
-    useNativePlaybackController(audioRef);
+    // 原生播完一首时，若 WebView 时钟因后台冻结未触发自动切歌，这里兜底交给队列处理。
+    const nativePlaybackEndedRef = useRef<() => void>(() => {});
+    nativePlaybackEndedRef.current = () => { void handleNextTrack(); };
+    useNativePlaybackController(audioRef, { onEnded: () => nativePlaybackEndedRef.current() });
 
     const handleTranscodeFallback = useTranscodeFallback({
         audioSrc,
