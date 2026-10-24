@@ -62,8 +62,10 @@ public class ProviderLoginActivity extends Activity {
     private static final String LOGIN_URL_KUGOU = "https://www.kugou.com/";
     private static final String LOGIN_URL_QQ = "https://y.qq.com/";
 
-    private static final String[] SESSION_KEYS_KUGOU = { "token", "userid", "kg_mid" };
-    private static final String[] SESSION_KEYS_QQ = { "qqmusic_key", "uin", "skey" };
+    // 酷狗匿名访问也会生成 kg_mid（设备标识），不能作为登录判定键；只有登录后才会有 token/userid。
+    private static final String[] SESSION_KEYS_KUGOU = { "token", "userid" };
+    // QQ 游客也有 qqmusic_key（设备键），登录判定只看真正的账号凭证。
+    private static final String[] SESSION_KEYS_QQ = { "uin", "skey", "wxuin", "wxkey", "music_uin", "music_skey", "qqmusic_uin", "qqmusic_skey" };
 
     private static final String[] COOKIE_URLS_KUGOU = {
             "https://www.kugou.com/", "https://m.kugou.com/", "https://login-user.kugou.com/"

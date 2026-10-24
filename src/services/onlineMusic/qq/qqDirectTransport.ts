@@ -230,6 +230,75 @@ export const requestQqDirect = async (
             return qqDirectSearch(params);
         case 'music_play':
             return qqDirectPlay(params);
+        case 'user_playlist': {
+            // 我的歌单：GetUserListInfo（Musicu 协议），返回 { playlist, total }。
+            const uin = readQqSessionUin() || '0';
+            const data = await qqMusicu<any>(
+                'QQMusic.MusichallServer.PlayListServer',
+                'GetUserListInfo',
+                { uin, start: 0, num: 60, order: 2, needAll: 1 },
+            );
+            const vList = Array.isArray(data?.vList) ? data.vList : [];
+            return { playlist: vList, total: vList.length };
+        }
+        case 'user_playlist_detail':
+        case 'user_playlist_tracks': {
+            // 歌单歌曲：GetPlayListDetail。
+            const tid = String(params.tid ?? params.disstid ?? '');
+            const offset = Number(params.offset ?? 0) || 0;
+            const limit = Number(params.limit ?? 100) || 100;
+            const data = await qqMusicu<any>(
+                'QQMusic.MusichallServer.PlayListServer',
+                'GetPlayListDetail',
+                { disstid: tid, userinfo: 1, song_begin: offset, song_num: limit, needAll: 1 },
+            );
+            const songs = Array.isArray(data?.songlist) ? data.songlist : [];
+            return { songs, total: songs.length, more: false };
+        }
+        case 'song_list_detail': {
+            // 歌单详情（老接口形状）：{ response: { cdlist: [...] } }。
+            const disstid = String(params.disstid ?? params.tid ?? '');
+            const data = await qqMusicu<any>(
+                'QQMusic.MusichallServer.PlayListServer',
+                'GetPlayListDetail',
+                { disstid, userinfo: 1, song_begin: 0, song_num: 200, needAll: 1 },
+            );
+            const songs = Array.isArray(data?.songlist) ? data.songlist : [];
+            return {
+                response: {
+                    cdlist: [{
+                        disstid: String(disstid),
+                        dissname: String(data?.dirinfo?.dissname ?? ''),
+                        songlist: songs,
+                        songcnt: songs.length,
+                    }],
+                },
+            };
+        }
+        case 'user_liked_songs': {
+            // 我喜欢的音乐：QQ 固定歌单 ID 201。
+            const offset = Number(params.offset ?? 0) || 0;
+            const limit = Number(params.limit ?? 100) || 100;
+            const data = await qqMusicu<any>(
+                'QQMusic.MusichallServer.PlayListServer',
+                'GetPlayListDetail',
+                { disstid: '201', userinfo: 1, song_begin: offset, song_num: limit, needAll: 1 },
+            );
+            const songs = Array.isArray(data?.songlist) ? data.songlist : [];
+            return { songs, total: songs.length, more: false };
+        }
+        case 'song_info': {
+            // 单曲详情：GetMusicDetail（songMidList）。
+            const mids = Array.isArray(params.songmid)
+                ? params.songmid
+                : (params.songmid || params.songid) ? [params.songmid || params.songid] : [];
+            const data = await qqMusicu<any>(
+                'QQMusic.MusicDetailServer',
+                'GetMusicDetail',
+                { songMidList: mids },
+            );
+            return { songs: Array.isArray(data?.trackList) ? data.trackList : [] };
+        }
         default:
             // 未实现的高级操作返回安全空，不让登录/账号链路因辅助调用中断。
             return {};
