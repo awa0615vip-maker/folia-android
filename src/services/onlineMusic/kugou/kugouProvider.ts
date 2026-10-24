@@ -1634,10 +1634,34 @@ export const kugouProvider: OnlineMusicProvider = {
             const likedCollectionId = String(globalCollectionId);
             const findLikedFileId = async (forceRefresh: boolean): Promise<MediaId | undefined> => {
                 const likedTracks = await getKugouPlaylistTrackSongs(likedCollectionId, { forceRefresh });
-                const likedTrack = likedTracks.find(track => getKugouTrackHash(track) === targetHash);
-                const fileId = likedTrack?.sourceRef?.kind === 'online'
+                let likedTrack = likedTracks.find(track => getKugouTrackHash(track) === targetHash);
+                let fileId = likedTrack?.sourceRef?.kind === 'online'
                     ? likedTrack.sourceRef.providerData?.fileId
                     : undefined;
+                if (typeof fileId !== 'string' && typeof fileId !== 'number') fileId = undefined;
+                // 云文件列表（按 global_collection_id）产出的行**常常没有 fileid**，而取消收藏必须靠
+                // fileid 定位行。这时改问 App 实际用的端点 /v4/get_list_all_file_v3（按 listid 取），
+                // 保证云盘里收藏的歌也能取消喜欢。
+                if (fileId === undefined) {
+                    const alt = await Promise.resolve(requestKugou('playlist_track_all_new', {
+                        listid: String(listId), page: 1, pagesize: 300,
+                    })).catch(() => null);
+                    const altRows = Array.isArray((alt as { data?: { songs?: unknown[] } } | null)?.data?.songs)
+                        ? (alt as { data: { songs: unknown[] } }).data.songs
+                        : (Array.isArray((alt as { data?: { info?: unknown[] } } | null)?.data?.info)
+                            ? (alt as { data: { info: unknown[] } }).data.info
+                            : []);
+                    const altSongs = altRows.map(row => normalizeKugouSong(row as Record<string, unknown>));
+                    likedTrack = altSongs.find(track => getKugouTrackHash(track) === targetHash);
+                    fileId = likedTrack?.sourceRef?.kind === 'online'
+                        ? likedTrack.sourceRef.providerData?.fileId
+                        : undefined;
+                    console.info('[KugouProvider] unlike:alt-source', {
+                        rows: altSongs.length,
+                        hashFound: Boolean(likedTrack),
+                        fileIdFound: fileId !== undefined && String(fileId) !== '',
+                    });
+                }
                 if (typeof fileId !== 'string' && typeof fileId !== 'number') return undefined;
                 return String(fileId) === '' ? undefined : fileId;
             };
