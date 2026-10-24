@@ -1,0 +1,130 @@
+package top.izuna.foliamajor;
+
+import android.os.Bundle;
+import android.os.SystemClock;
+import android.webkit.RenderProcessGoneDetail;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+
+import androidx.activity.OnBackPressedCallback;
+
+import com.getcapacitor.BridgeActivity;
+import com.getcapacitor.WebViewListener;
+
+public class MainActivity extends BridgeActivity {
+    private long lastWebViewRecoveryAt = 0L;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        CrashDiagnostics.install(getApplicationContext());
+        registerPlugin(FoliaNativePlugin.class);
+        super.onCreate(savedInstanceState);
+        installWebViewRendererGuard();
+        WebView webView = getBridge().getWebView();
+        WebSettings settings = webView.getSettings();
+        settings.setMediaPlaybackRequiresUserGesture(false);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                // Let the WebView close its own settings/effects layer first; only a Back with
+                // nothing left to close exits the activity.
+                if (FoliaNativePlugin.emitBackPressed()) return;
+                finish();
+            }
+        });
+        PhoneLayoutOrientation.apply(this);
+        PhoneFitCutout.apply(this);
+        restoreAdaptiveLayout(webView);
+        // 启动时窗口焦点和系统栏状态还会变一次，只应用一遍会被后面的 inset 恢复覆盖。
+        webView.postDelayed(() -> restoreAdaptiveLayout(webView), 500);
+        webView.postDelayed(() -> restoreAdaptiveLayout(webView), 1500);
+        webView.postDelayed(() -> PhoneFitCutout.apply(this), 500);
+        webView.postDelayed(() -> PhoneFitCutout.apply(this), 1500);
+    }
+
+    /**
+     * A dead WebView renderer kills the Android process when the client returns false.
+     * Record the reason, then recreate once; a repeated death exits normally instead of
+     * entering a renderer restart loop.
+     */
+    private void installWebViewRendererGuard() {
+        getBridge().addWebViewListener(new WebViewListener() {
+            @Override
+            public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                boolean didCrash = detail != null && detail.didCrash();
+                int priority = detail == null ? -1 : detail.rendererPriorityAtExit();
+                CrashDiagnostics.recordText(
+                    getApplicationContext(),
+                    "webview-renderer-gone",
+                    "renderer",
+                    didCrash ? "renderer-crash" : "renderer-killed",
+                    "didCrash=" + didCrash + " priorityAtExit=" + priority,
+                    "Capacitor WebView renderer process ended"
+                );
+
+                long now = SystemClock.elapsedRealtime();
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    if (now - lastWebViewRecoveryAt > 15_000L) {
+                        lastWebViewRecoveryAt = now;
+                        if (view != null) view.destroy();
+                        recreate();
+                    } else {
+                        finish();
+                    }
+                });
+                return true;
+            }
+        });
+    }
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        // 回到前台：Web 层恢复可视化渲染并检查音频是否被系统挂起，需要时从断点续播。
+        FoliaNativePlugin.emitAppLifecycle("foreground");
+    }
+
+    @Override
+    public void onStop() {
+        super.onStop();
+        // 切到后台（Home/锁屏/切任务）：WebView 不会收到页面级 visibilitychange，这里显式通知
+        // Web 层暂停可视化渲染（仅保留音频），避免不可见时继续吃 GPU/CPU 导致“退出软件很卡”。
+        FoliaNativePlugin.emitAppLifecycle("background");
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        if (getBridge() != null) {
+            WebView webView = getBridge().getWebView();
+            if (webView != null) {
+                webView.postDelayed(() -> restoreAdaptiveLayout(webView), 100);
+            }
+        }
+        PhoneFitCutout.apply(this);
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus && getBridge() != null) {
+            WebView webView = getBridge().getWebView();
+            if (webView != null) {
+                webView.post(() -> restoreAdaptiveLayout(webView));
+                webView.post(() -> PhoneFitCutout.apply(this));
+            }
+        }
+    }
+
+    // 用户在设置里开过「自适应屏幕分辨率」的话，恢复沉浸式全屏。失败时回滚，避免反复启动就崩。
+    private void restoreAdaptiveLayout(WebView webView) {
+        // 自适应布局的 inset 操作可能重置 cutout 模式，这里统一补一次挖孔适配。
+        PhoneFitCutout.apply(this);
+        if (!AdaptiveLayout.isEnabled(this)) return;
+        if (!AdaptiveLayout.apply(this, webView, true)) {
+            AdaptiveLayout.setEnabled(this, false);
+        }
+    }
+}

@@ -2,7 +2,10 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './i18n/config';
 import './index.css';
+import './styles/perfTier.css';
 import App from './App';
+// 副作用 import：安卓自适应性能引擎在模块加载时探测硬件并把 `<html data-perf-tier>` 写好，第一帧即按档位渲染。
+import './stores/usePerformanceTierStore';
 import AppSplashGate from './components/AppSplashGate';
 import RemoteControlApp from './components/remote/RemoteControlApp';
 import ObsBrowserSourceApp from './components/obs/ObsBrowserSourceApp';

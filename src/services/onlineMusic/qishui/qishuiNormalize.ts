@@ -6,6 +6,23 @@ import { OnlineProviderError } from '../../../types/onlineMusic';
 export type QishuiRecord = Record<string, any>;
 export const record = (raw: unknown): QishuiRecord => raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
 const text = (value: unknown) => value == null ? '' : String(value);
+
+/** 汽水旧版PC API / 字节封面对象 → 可直接访问的图片 URL（安卓WebView登录路径使用）。 */
+export function coverFromUrlCover(urlCover: unknown): string | undefined {
+    if (!urlCover || typeof urlCover !== 'object') return undefined;
+    const u = urlCover as QishuiRecord;
+    const first = Array.isArray(u.urls) ? String(u.urls[0] ?? '') : '';
+    const uri = String(u.uri ?? '');
+    if (/^https?:\/\//i.test(first) && (!uri || first.includes(uri) || first.includes('?'))) {
+        return first || undefined;
+    }
+    if (!first && !uri) return undefined;
+    let cover = first.includes(uri) ? first : `${first}${uri}`;
+    if (cover && !cover.includes('~') && !cover.includes('?')) {
+        cover += '~tplv-b829550vbb-crop-center:500:500.jpg';
+    }
+    return cover || undefined;
+}
 export function qishuiImage(raw: unknown): string {
     if (typeof raw === 'string') return raw.startsWith('https://') ? raw : '';
     const value = record(raw);

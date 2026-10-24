@@ -32,3 +32,14 @@ export const isSecondaryModifierPressed = (event: KeyboardEvent): boolean => (
 
 /** Label for the primary modifier, for shortcut hints shown in the UI. */
 export const PRIMARY_MODIFIER_LABEL = isMacPlatform ? 'Cmd' : 'Ctrl';
+
+/**
+ * 是否运行在 Folia 安卓 Capacitor WebView 中。
+ * 唯一权威判断：Capacitor 桥存在且平台为 android；UA 包含 wv 仅作辅助。
+ */
+export const isAndroidNativeRuntime = (): boolean => typeof window !== 'undefined'
+    && Boolean((window as any).Capacitor?.getPlatform?.() === 'android'
+        || (navigator.userAgent.toLowerCase().includes('wv') && navigator.userAgent.toLowerCase().includes('android')));
+
+export const IS_ANDROID_WEBVIEW: boolean = isAndroidNativeRuntime();
+

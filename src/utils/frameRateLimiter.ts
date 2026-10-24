@@ -28,6 +28,7 @@ export const isVisualizerFrameRate = (value: unknown): value is VisualizerFrameR
     || value === 120
     || value === 90
     || value === 60
+    || value === 30
 );
 
 export const parseVisualizerFrameRate = (value: string | null): VisualizerFrameRate => {
@@ -214,4 +215,34 @@ export const installGlobalVisualizerFrameRateLimiter = (overrideFrameRate?: Visu
 
     window.requestAnimationFrame = installedLimiter.requestAnimationFrame;
     window.cancelAnimationFrame = installedLimiter.cancelAnimationFrame;
+};
+
+// ─── 安卓后台暂停：切后台时彻底冻结可视化RAF回调，只保留原生音频服务播放 ───────
+let backgroundPaused = false;
+let pausedNativeRaf: RequestAnimationFrameFn | null = null;
+let pausedCancelRaf: CancelAnimationFrameFn | null = null;
+
+/**
+ * 安卓切后台/回前台时调用：true 时全局 requestAnimationFrame 不再触发任何回调（GPU/CPU 完全停渲染），
+ * 音频播放由原生前台服务独立维护；false 时恢复限流RAF。
+ */
+export const setVisualizerBackgroundPaused = (paused: boolean): void => {
+    if (typeof window === 'undefined') return;
+    if (backgroundPaused === paused) return;
+    backgroundPaused = paused;
+    const frameWindow = window as WindowWithVisualizerFrameRateLimiter;
+    if (paused) {
+        // 保存当前RAF实现，替换为冻结版：只记录不回调
+        pausedNativeRaf = window.requestAnimationFrame;
+        pausedCancelRaf = window.cancelAnimationFrame;
+        const noopRaf: RequestAnimationFrameFn = () => 0;
+        const noopCancel: CancelAnimationFrameFn = () => {};
+        window.requestAnimationFrame = noopRaf;
+        window.cancelAnimationFrame = noopCancel;
+    } else if (pausedNativeRaf && pausedCancelRaf) {
+        window.requestAnimationFrame = pausedNativeRaf;
+        window.cancelAnimationFrame = pausedCancelRaf;
+        pausedNativeRaf = null;
+        pausedCancelRaf = null;
+    }
 };

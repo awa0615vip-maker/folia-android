@@ -5,6 +5,11 @@ import type { PersonalFmRequestOptions, ProviderSongAvailability } from '../../.
 import { withLoginRequestLimit } from '../login/loginRequestLimit';
 import { withOnlineRequestLimit } from '../failure/onlineRequestLimit';
 import { errorFields } from '../../../utils/errorText';
+import {
+  isFoliaExtensionBridgeAvailable,
+  isFoliaExtensionBridgeConfigured,
+  requestFoliaExtension,
+} from './foliaExtensionBridge';
 
 type UnavailableSongReplacement = {
   replacementSong: SongResult;
@@ -183,6 +188,36 @@ const eitherSignal = (caller: AbortSignal | null | undefined, limit: AbortSignal
 // the sign-in's limit; an HTTP error answer to it throws NeteaseLoginHttpError instead of being read as
 // an answer. 'online': a song's address or a collection's tracks, with the limit of online requests.
 const fetchWithCreds = async (endpoint: string, options: RequestInit = {}, limit?: 'sign-in' | 'online') => {
+  // 安卓原生 WebView（无 Electron 后端、未配置远端 API）优先走「本地加密 + 原生 OkHttp 直连网易云」：
+  // 由 foliaExtensionBridge → 原生桥（nativeBridge/netease.js，weapi/eapi 加密）完成请求，
+  // 不需要部署任何远端 API 服务器，登录/搜索/取流全部在设备本地闭环。
+  const configuredApiBase = getConfiguredApiBase();
+  const extensionConfigured = isFoliaExtensionBridgeConfigured(configuredApiBase);
+
+  if (!isElectronRuntime() && (extensionConfigured || !configuredApiBase)) {
+    const bridgeAvailable = await isFoliaExtensionBridgeAvailable();
+    if (bridgeAvailable) {
+      const target = new URL(endpoint, 'https://folia.local');
+      const query = Object.fromEntries(target.searchParams.entries());
+      const response = await requestFoliaExtension<Record<string, any>>({
+        provider: 'netease',
+        operation: target.pathname,
+        path: target.pathname,
+        method: options.method || 'GET',
+        query,
+        body: options.body,
+        headers: Object.fromEntries(new Headers(options.headers || {}).entries()),
+      });
+      if (response?.__foliaBridgeError) {
+        throw new Error(response.message || response.__foliaBridgeError);
+      }
+      return response;
+    }
+    if (extensionConfigured) {
+      throw new Error(NETEASE_API_UNAVAILABLE);
+    }
+  }
+
   const base = await getApiBase();
   const url = `${base}${endpoint}`;
   // Ensure we send credentials to persist session (cookies)
