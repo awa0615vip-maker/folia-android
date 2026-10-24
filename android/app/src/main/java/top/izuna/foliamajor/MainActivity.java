@@ -87,6 +87,21 @@ public class MainActivity extends BridgeActivity {
     }
 
     @Override
+    public void onPause() {
+        super.onPause();
+        // Capacitor 的 Bridge.onPause 会调用 WebView.onPause()，而 WebView 暂停会连同 <audio>
+        // 一起停掉——这就是“切后台就停止播放”的根因。音乐应用切后台必须保持流不断，
+        // 所以这里立即恢复 WebView。渲染开销不用担心：Web 层收到 background 事件后已冻结
+        // 全部可视化 RAF（见 androidAppLifecycle.ts），前台服务 + 音频焦点 + WakeLock 也已就位。
+        if (getBridge() != null) {
+            WebView webView = getBridge().getWebView();
+            if (webView != null) {
+                webView.post(() -> webView.onResume());
+            }
+        }
+    }
+
+    @Override
     public void onStop() {
         super.onStop();
         // 切到后台（Home/锁屏/切任务）：WebView 不会收到页面级 visibilitychange，这里显式通知

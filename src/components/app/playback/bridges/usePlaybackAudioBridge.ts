@@ -16,6 +16,8 @@ import { useAudioSettingsStore } from '../../../../stores/useAudioSettingsStore'
 import { setPlayerState } from '../../../../stores/usePlaybackStore';
 import { useTranslation } from 'react-i18next';
 import { usePlaybackStore } from '../../../../stores/usePlaybackStore';
+import { subscribeAppLifecycle } from '../../../../services/androidAppLifecycle';
+import { IS_ANDROID_WEBVIEW } from '../../../../utils/platform';
 import { resolveHeardAudioEqualizerSettings } from '../../../../utils/audioEqualizerModCurve';
 
 // src/components/app/playback/bridges/usePlaybackAudioBridge.ts
@@ -92,6 +94,38 @@ export function usePlaybackAudioBridge({
     useEffect(() => {
         isTransitionAudibleRef.current = isTransitionAudible;
     }, [isTransitionAudible]);
+
+    // 后台保活看门狗：切到后台后，系统（尤其 MIUI/HyperOS）可能把 AudioContext 挂起或把
+    // <audio> 元素暂停，导致声音中断。每 2 秒尝试恢复一次：resume 挂起的上下文、续播被
+    // 暂停但理应继续播放的元素；回到前台即停止轮询。原生侧 MainActivity.onPause 里已恢复
+    // WebView（Capacitor 默认 pause WebView 会连带停掉音频），这里是第二道防线。
+    useEffect(() => {
+        if (!IS_ANDROID_WEBVIEW) return;
+        let timer: number | null = null;
+        const unsubscribe = subscribeAppLifecycle(state => {
+            if (state === 'background') {
+                if (timer !== null) return;
+                timer = window.setInterval(() => {
+                    const ctx = audioContextRef.current;
+                    if (ctx && ctx.state === 'suspended') {
+                        void ctx.resume().catch(() => undefined);
+                    }
+                    const element = audioRef.current;
+                    if (element && element.paused
+                        && usePlaybackStore.getState().playerState === PlayerState.PLAYING) {
+                        void element.play().catch(() => undefined);
+                    }
+                }, 2000);
+            } else if (timer !== null) {
+                clearInterval(timer);
+                timer = null;
+            }
+        });
+        return () => {
+            unsubscribe();
+            if (timer !== null) clearInterval(timer);
+        };
+    }, [audioContextRef, audioRef]);
 
     // Recalculates source-specific gain after the audio graph or playback settings become ready.
     const applyReplayGain = useCallback(() => {
