@@ -26,6 +26,9 @@ import { modeNeedsBeatGrid } from './automix/transitionStrategy';
 import { useLyricSettingsStore } from '../stores/useLyricSettingsStore';
 import { useAutomixSettingsStore } from '../stores/useAutomixSettingsStore';
 import { useAudioSettingsStore } from '../stores/useAudioSettingsStore';
+import { readEffectiveTier } from '../stores/usePerformanceTierStore';
+import { saveAudioBlob } from './audioCache';
+import { isCacheableAudioResponse, clearCachedSongAudioDistrust } from './playbackRecovery/mediaCacheGuard';
 import { onlineFailureOf } from './onlineMusic/failure/onlineFailureCase';
 import { noteOnlineRequestCooldown, onlineRequestCooldown } from './onlineMusic/failure/onlineRequestCooldown';
 import { usePlaybackStore } from '../stores/usePlaybackStore';
@@ -45,6 +48,148 @@ const PREFETCH_COUNT_NEXT = 2;  // The next two songs' light resources (URL + ly
 const PREFETCH_COUNT_PREV = 1;  // One behind, so "previous" is instant rather than a refetch
 const URL_TTL_MS = 1200 * 1000; // 1200 seconds = 20 minutes
 const MAX_PREFETCH_CACHE_SIZE = 200; // Evict least recently used entries beyond this limit
+
+// --- Android ahead byte-download (full-track cache-before-play) ---
+//
+// Upstream 0.7.22 prefetches only light resources (URL + lyrics + cover) and writes audio bytes
+// only AFTER a track has finished playing (playedTrackCache). On Android WebView a never-cached
+// track therefore streams from a remote URL, which stutters and pops. This block restores the
+// legacy behavior: while a track plays, the next one or two tracks are downloaded in full into
+// the media cache, so switching to them plays from a local blob (no stutter, no crackle).
+const AHEAD_BYTE_COUNT_BY_TIER: Record<'low' | 'balanced' | 'high', number> = {
+  low: 1,
+  balanced: 1,
+  high: 2,
+};
+
+/** Delay before the first byte download starts: let the current track claim the buffer first. */
+const AHEAD_FIRST_DELAY_MS = 2500;
+
+/** Cross-scheduling dedupe: the same song must not download twice concurrently. */
+const audioBytesInFlight = new Set<string>();
+
+/** After the whole track lands, mark the in-memory entry CACHED_IN_DB so reads go local, not remote. */
+const markPrefetchAudioCached = (song: SongResult): void => {
+  const songKey = getPrefetchSongKey(song);
+  const existing = prefetchCache.get(songKey);
+  const nextData: PrefetchedSongData = {
+    songKey,
+    songId: song.id,
+    audioUrl: 'CACHED_IN_DB',
+    audioUrlFetchedAt: 0,
+    audioUrlQuality: null,
+    replayGain: existing?.replayGain ?? song.replayGain,
+    lyrics: existing?.lyrics || null,
+    lyricRaw: existing?.lyricRaw || null,
+    lyricPreferenceSource: existing?.lyricPreferenceSource || null,
+    coverUrl: existing?.coverUrl || null,
+  };
+  touchPrefetchCacheEntry(songKey, nextData);
+};
+
+/**
+ * Downloads one song's full audio bytes into the local media cache. Skips when already cached,
+ * non-online, no usable URL, or caching is switched off. Any failure falls back silently: the
+ * song then streams remotely (old behavior), never blocking playback.
+ */
+const downloadPrefetchedAudioBytes = async (
+  song: SongResult,
+  audioQuality: AudioQualityPreference,
+  signal: AbortSignal,
+): Promise<void> => {
+  if (signal.aborted) return;
+  if (!useAudioSettingsStore.getState().enableMediaCache) return;
+
+  const sourceRef = getPlaybackSourceRef(song);
+  if (sourceRef.kind !== 'online' || !omni.canPlaySong(song)) return;
+
+  const cacheKey = getSongResourceCacheKey('audio', song);
+  if (audioBytesInFlight.has(cacheKey)) return;
+
+  if (await hasCachedSongAudio(song)) {
+    markPrefetchAudioCached(song);
+    return;
+  }
+
+  // Reuse the in-memory resolved URL when there is one; otherwise resolve fresh.
+  let audioUrl: string | null | undefined = getPrefetchedData(song, audioQuality)?.audioUrl;
+  if (audioUrl === 'CACHED_IN_DB') return;
+  if (!audioUrl || audioUrl.startsWith('blob:')) {
+    const resolved = await resolvePrefetchAudioUrl(song, audioQuality, signal);
+    if (signal.aborted || !resolved) return;
+    if (resolved.audioUrl === 'CACHED_IN_DB') {
+      markPrefetchAudioCached(song);
+      return;
+    }
+    audioUrl = resolved.audioUrl;
+  }
+  if (!audioUrl || audioUrl.startsWith('blob:')) return;
+
+  audioBytesInFlight.add(cacheKey);
+  try {
+    const response = await fetch(audioUrl, { signal });
+    if (signal.aborted) return;
+    const blob = await response.blob();
+    // Same guard as playedTrackCache: an error page / JSON / truncated download must not be
+    // written over a real track.
+    if (!isCacheableAudioResponse(response, blob)) {
+      console.warn('[Prefetch] Skipped ahead-download that is not audio:', song.name, {
+        status: response.status,
+        contentType: response.headers?.get('content-type') ?? blob.type,
+        size: blob.size,
+      });
+      return;
+    }
+    await saveAudioBlob(cacheKey, blob);
+    clearCachedSongAudioDistrust(song);
+    markPrefetchAudioCached(song);
+    console.log('[Prefetch] Full audio downloaded ahead of playback:', song.name);
+  } catch (error) {
+    // Abort is normal track-change behavior; other failures fall back silently.
+    if (!signal.aborted) {
+      console.warn(`[Prefetch] Ahead audio download failed for ${song.name}:`, error);
+    }
+  } finally {
+    audioBytesInFlight.delete(cacheKey);
+  }
+};
+
+/**
+ * Schedules full-track downloads for the forward songs: next first, serial, first one delayed so
+ * the current track keeps the buffer. `forwardSongs` must be in playback order.
+ */
+const scheduleAheadAudioDownloads = (
+  forwardSongs: SongResult[],
+  audioQuality: AudioQualityPreference,
+  signal: AbortSignal,
+): void => {
+  if (!useAudioSettingsStore.getState().enableMediaCache) return;
+  const count = AHEAD_BYTE_COUNT_BY_TIER[readEffectiveTier()] ?? 1;
+  const targets = forwardSongs.slice(0, count);
+  if (targets.length === 0) return;
+
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const onAbort = () => {
+    if (timer != null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+  if (signal.aborted) return;
+  signal.addEventListener('abort', onAbort, { once: true });
+
+  const runIndex = async (index: number): Promise<void> => {
+    if (signal.aborted || index >= targets.length) return;
+    await downloadPrefetchedAudioBytes(targets[index], audioQuality, signal);
+    if (!signal.aborted) await runIndex(index + 1);
+  };
+
+  timer = setTimeout(() => {
+    timer = null;
+    if (!signal.aborted) void runIndex(0);
+  }, AHEAD_FIRST_DELAY_MS);
+};
+
 
 /**
  * Hands a track to the automix analyser with whatever URL this file resolved for it.
@@ -609,6 +754,17 @@ export const prefetchNearbySongs = async (
     };
 
     prefetchWithIdle(songsToPrefetch, 0);
+
+    // Full-track byte downloads for the forward songs only (next / next-next, not previous):
+    // switching to them then plays from a local copy instead of a stuttering remote stream.
+    const forwardSongs: SongResult[] = [];
+    for (let i = 1; i <= PREFETCH_COUNT_NEXT; i++) {
+      const idx = currentIndex + i;
+      if (idx < queue.length) {
+        forwardSongs.push(queue[idx]);
+      }
+    }
+    scheduleAheadAudioDownloads(forwardSongs, audioQuality, signal);
 };
 
 /**

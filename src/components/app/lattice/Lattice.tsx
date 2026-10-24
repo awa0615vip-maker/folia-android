@@ -17,6 +17,7 @@ import { countRender } from '../../../dev/renderCount';
 import '../../wall/wall.css';
 import './Lattice.css';
 import LatticeLyricsProvider from './lyrics/LatticeLyricsProvider';
+import { prewarmLatticeLyrics } from './lyrics/prewarmLatticeLyrics';
 import type { LatticeLyricSource } from './lyrics/types';
 import { getPlaybackSongKey } from '../../../utils/appPlaybackGuards';
 import { isPrimaryModifierPressed, isSecondaryModifierPressed } from '../../../utils/platform';
@@ -103,6 +104,9 @@ export default function Lattice({
     // Let go of again when the view comes back to a wall that is still up: Back, pressed while
     // the wall leaves for the page, calls this same wall back, and nothing mounts to read the tile.
     const [startTileId] = useState(() => useAppViewStore.getState().latticeReturnTileId);
+    // Warms the lyric chunk and a real WebGL context as soon as the wall opens, so the first
+    // "details" expand finds neither a chunk fetch nor the slow first context creation on Android.
+    useEffect(() => { prewarmLatticeLyrics(); }, []);
     useEffect(() => {
         useAppViewStore.getState().setLatticeReturnTileId(null);
         return useAppViewStore.subscribe((state, before) => {
