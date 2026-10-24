@@ -99,7 +99,6 @@ import { usePlayerChromeAutoHide } from './hooks/usePlayerChromeAutoHide';
 import { useMacWallpaperHitRegions } from './hooks/useMacWallpaperHitRegions';
 import { useIdleCursorHide } from './hooks/useIdleCursorHide';
 import { usePlaybackAudioBridge } from './components/app/playback/bridges/usePlaybackAudioBridge';
-import { useNativePlaybackController } from './components/app/playback/useNativePlaybackController';
 import { useTranscodeFallback } from './hooks/useTranscodeFallback';
 import { useAutomixDecks, type AutomixDeckId } from './services/automix/useAutomixDecks';
 import { usePlaybackInteractionBridge } from './components/app/playback/bridges/usePlaybackInteractionBridge';
@@ -178,7 +177,11 @@ import { useFoliumHostActions } from './mods/runtime/hostActions';
 import { refreshPrefetchAfterQueueEdit } from './services/prefetchService';
 import { FoliumStageLayerSlot } from './mods/folium/registries/stageLayers';
 import { errorFields } from './utils/errorText';
-import { runsOnWindows } from './utils/platform';
+import { runsOnWindows, IS_ANDROID_WEBVIEW } from './utils/platform';
+import {
+    isIgnoringBatteryOptimizations,
+    requestIgnoreBatteryOptimizations,
+} from './services/batteryOptimizationBridge';
 
 const LOCAL_MUSIC_UPDATED_EVENT = 'folia-local-music-updated';
 const DEV_DEBUG_SHORTCUT_LABEL = 'Alt+Shift+D';
@@ -1335,12 +1338,21 @@ export default function App() {
         isTransitionAudible: automix.isTransitionAudible,
     });
 
-    // 原生播放器方案（设置里可选）：声音改由原生 MediaPlayer 输出，WebView 端静音保活，
-    // 队列/歌词/进度/自动切歌照常由 audio 元素事件流驱动；本地歌自动回退原版播放。
-    // 原生播完一首时，若 WebView 时钟因后台冻结未触发自动切歌，这里兜底交给队列处理。
-    const nativePlaybackEndedRef = useRef<() => void>(() => {});
-    nativePlaybackEndedRef.current = () => { void handleNextTrack(); };
-    useNativePlaybackController(audioRef, { onEnded: () => nativePlaybackEndedRef.current() });
+    // 启动时自动申请「后台无限制」（电池优化豁免）：未授权时每 3 天提醒一次。
+    useEffect(() => {
+        if (!IS_ANDROID_WEBVIEW) return;
+        void isIgnoringBatteryOptimizations().then((ignoring) => {
+            if (ignoring) return;
+            try {
+                const last = Number(localStorage.getItem('folia_battery_prompt_at') ?? 0);
+                if (Date.now() - last < 3 * 24 * 60 * 60 * 1000) return;
+                localStorage.setItem('folia_battery_prompt_at', String(Date.now()));
+            } catch {
+                // 存储不可用时不阻止请求。
+            }
+            void requestIgnoreBatteryOptimizations().catch(() => undefined);
+        }).catch(() => undefined);
+    }, []);
 
     const handleTranscodeFallback = useTranscodeFallback({
         audioSrc,

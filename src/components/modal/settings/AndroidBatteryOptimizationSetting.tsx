@@ -5,7 +5,7 @@ import SettingsSectionHeading from './navigation/SettingsSectionHeading';
 import {
     isIgnoringBatteryOptimizations,
     requestIgnoreBatteryOptimizations,
-} from '../../../services/nativeEngineBridge';
+} from '../../../services/batteryOptimizationBridge';
 
 // src/components/modal/settings/AndroidBatteryOptimizationSetting.tsx
 // 「后台无限制」：查看当前电池优化豁免状态，一键发起系统授权弹窗。

@@ -12,7 +12,6 @@ import AndroidImmersiveSetting from '../AndroidImmersiveSetting';
 import AndroidKeepScreenOnSetting from '../AndroidKeepScreenOnSetting';
 import AndroidPhoneFitSetting from '../AndroidPhoneFitSetting';
 import AndroidUpdateSection from '../AndroidUpdateSection';
-import AndroidPlaybackEngineSetting from '../AndroidPlaybackEngineSetting';
 import AndroidBatteryOptimizationSetting from '../AndroidBatteryOptimizationSetting';
 
 // src/components/modal/settings/pages/AndroidSettingsSections.tsx
@@ -105,11 +104,6 @@ export const AndroidGeneralSettingsSection: React.FC = () => {
                 theme={theme}
             />
             <AndroidPhoneFitSetting
-                isDaylight={isDaylight}
-                settingsCardClass={settingsCardClass}
-                theme={theme}
-            />
-            <AndroidPlaybackEngineSetting
                 isDaylight={isDaylight}
                 settingsCardClass={settingsCardClass}
                 theme={theme}

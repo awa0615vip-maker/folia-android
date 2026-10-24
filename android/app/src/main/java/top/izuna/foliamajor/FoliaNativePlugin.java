@@ -140,55 +140,6 @@ public class FoliaNativePlugin extends Plugin {
         plugin.getActivity().runOnUiThread(() -> plugin.notifyListeners("mediaAction", payload));
     }
 
-    /** 原生播放器（MediaPlayer 方案）进度回传。 */
-    static void emitNativeProgress(long positionMs, long durationMs) {
-        FoliaNativePlugin plugin = instance;
-        if (plugin == null) return;
-        Activity activity = plugin.getActivity();
-        if (activity == null) return;
-        activity.runOnUiThread(() -> {
-            JSObject payload = new JSObject();
-            payload.put("position", positionMs);
-            payload.put("duration", durationMs);
-            plugin.notifyListeners("nativeProgress", payload);
-        });
-    }
-
-    /** 原生播放器：一首播放完成（自动切下一首由 Web 层队列接管）。 */
-    static void emitNativeEnded() {
-        FoliaNativePlugin plugin = instance;
-        if (plugin == null) return;
-        Activity activity = plugin.getActivity();
-        if (activity == null) return;
-        activity.runOnUiThread(() -> plugin.notifyListeners("nativeEnded", new JSObject()));
-    }
-
-    /** 原生播放器：已开始播放，duration 就绪（用于立即校准进度条）。 */
-    static void emitNativeStarted(long durationMs) {
-        FoliaNativePlugin plugin = instance;
-        if (plugin == null) return;
-        Activity activity = plugin.getActivity();
-        if (activity == null) return;
-        activity.runOnUiThread(() -> {
-            JSObject payload = new JSObject();
-            payload.put("duration", durationMs);
-            plugin.notifyListeners("nativeStarted", payload);
-        });
-    }
-
-    /** 原生播放器：播放失败（源不可达 / 格式不支持等）。 */
-    static void emitNativeError(String message) {
-        FoliaNativePlugin plugin = instance;
-        if (plugin == null) return;
-        Activity activity = plugin.getActivity();
-        if (activity == null) return;
-        activity.runOnUiThread(() -> {
-            JSObject payload = new JSObject();
-            payload.put("message", message);
-            plugin.notifyListeners("nativeError", payload);
-        });
-    }
-
     /**
      * Activity 前后台切换：onStart → "foreground"，onStop → "background"。
      * WebView 作为原生视图被切到后台时通常不会触发页面的 visibilitychange，
@@ -1269,60 +1220,7 @@ public class FoliaNativePlugin extends Plugin {
         call.resolve();
     }
 
-    // --- Native playback engine bridge (MediaPlayer scheme) ---
 
-    @PluginMethod
-    public void startNativePlayback(PluginCall call) {
-        String url = call.getString("url");
-        if (url == null || url.isEmpty()) {
-            call.reject("no url");
-            return;
-        }
-        Intent intent = new Intent(getContext(), FoliaPlaybackService.class)
-            .setAction("native-play")
-            .putExtra("url", url)
-            .putExtra("position", call.getLong("position", 0L));
-        ContextCompat.startForegroundService(getContext(), intent);
-        call.resolve();
-    }
-
-    @PluginMethod
-    public void pauseNativePlayback(PluginCall call) {
-        startForegroundServiceWithAction("native-pause");
-        call.resolve();
-    }
-
-    @PluginMethod
-    public void resumeNativePlayback(PluginCall call) {
-        startForegroundServiceWithAction("native-resume");
-        call.resolve();
-    }
-
-    @PluginMethod
-    public void seekNativePlayback(PluginCall call) {
-        Intent intent = new Intent(getContext(), FoliaPlaybackService.class)
-            .setAction("native-seek")
-            .putExtra("position", call.getLong("position", 0L));
-        ContextCompat.startForegroundService(getContext(), intent);
-        call.resolve();
-    }
-
-    @PluginMethod
-    public void stopNativePlayback(PluginCall call) {
-        Intent intent = new Intent(getContext(), FoliaPlaybackService.class).setAction("native-stop");
-        getContext().startService(intent);
-        call.resolve();
-    }
-
-    /** 原生播放器是否正在播放（Web 层后台回前台自愈用）。 */
-    @PluginMethod
-    public void isNativePlaying(PluginCall call) {
-        JSObject result = new JSObject();
-        result.put("playing", FoliaPlaybackService.isNativePlaying());
-        call.resolve(result);
-    }
-
-    /** 是否已获得电池优化豁免（白名单）。 */
     @PluginMethod
     public void isIgnoringBatteryOptimizations(PluginCall call) {
         Context context = getContext();
@@ -1355,15 +1253,6 @@ public class FoliaNativePlugin extends Plugin {
             call.resolve();
         } catch (Exception error) {
             call.reject(error.getMessage());
-        }
-    }
-
-    private void startForegroundServiceWithAction(String action) {
-        Intent intent = new Intent(getContext(), FoliaPlaybackService.class).setAction(action);
-        try {
-            ContextCompat.startForegroundService(getContext(), intent);
-        } catch (Exception ignored) {
-            getContext().startService(intent);
         }
     }
 

@@ -1797,11 +1797,6 @@ export default {
     "keepScreenOn": "Keep screen on",
     "keepScreenOnDesc": "Stops the screen from sleeping while the app is open, so lyrics stay readable on a stand or while you copy them. Turn it off to restore the system auto-sleep.",
 
-    "playbackEngine": "Playback engine",
-    "playbackEngineNative": "Native player (recommended)",
-    "playbackEngineNativeDesc": "Each song is cached to local storage before it plays (already-played songs start instantly), then decoded by the system MediaPlayer: smooth and clean, with steadier background playback. Equalizer and spectrum visualization do not affect the sound; online tracks only, local tracks keep the built-in player.",
-    "playbackEngineWebview": "Built-in player (original)",
-    "playbackEngineWebviewDesc": "Original behavior with equalizer and spectrum visualization; WebView online playback may stutter or crackle on Android.",
     "batteryOptimization": "Unrestricted background",
     "batteryOptimizationDesc": "Stops the system from killing playback when locked or in the background. When not granted, a prompt appears on launch (once per 3 days); Xiaomi/HyperOS also requires autostart permission.",
     "batteryExempted": "Unrestricted background granted",
