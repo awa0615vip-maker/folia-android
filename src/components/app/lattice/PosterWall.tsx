@@ -61,6 +61,18 @@ const GAP = 8;
 const OVERSCAN = 500;
 // How much of the flight path may stay rendered while the camera travels, in viewports.
 const MAX_RESERVED_VIEWPORTS = 3;
+// 自适应性能引擎（安卓）：按设备档位参数表接管海报墙渲染窗口，桌面保持上游原行为。
+//  - reservedViewports：一次平移最多预留给目标区域多少倍视口（高端3/均衡2/低端1）
+//  - recycleOffscreen：低端档开启「有界滑动窗口」，滑出窗口的卡片卸载回收；高/均衡档只增不减累积
+//  - overscanFactor：四周额外预留视口比例（高端0.35≈1.7倍、均衡0.22、低端0.12），取代固定500px
+import { IS_ANDROID_WEBVIEW } from '../../../utils/platform';
+import { readPerformanceProfile } from '../../../stores/usePerformanceTierStore';
+const getPerfWall = () => (IS_ANDROID_WEBVIEW ? readPerformanceProfile().wall : null);
+const getWallOverscan = (viewport: { width: number; height: number }) => {
+    const wall = getPerfWall();
+    if (!wall) return OVERSCAN;
+    return Math.max(80, Math.round(viewport.height * wall.overscanFactor));
+};
 // Metro tile landing: the wave starts at the top-left of the viewport and runs down the diagonal.
 const ENTRANCE_STAGGER = 0.03;
 const ENTRANCE_MAX_DELAY = 0.34;
@@ -185,6 +197,13 @@ export default function PosterWall({
     // keys interrupt each pan before it settles, so bounds cannot wait for the animation to end.
     const reserveBounds = useCallback((camera: LatticeCamera) => {
         const destination = getWorldBounds(camera, viewportRef.current);
+        const perfWall = getPerfWall();
+        // 低端档「有界滑动窗口」：平移时以目标视口为中心重建渲染窗口，滑出窗口的卡片随后卸载回收，
+        // 内存被钉死在 recycleWindowFactor 内；不再像高/均衡档那样只增不减地累积。
+        if (perfWall?.recycleOffscreen) {
+            setBounds(destination);
+            return;
+        }
         setBounds(current => {
             const covered = destination.left >= current.left && destination.right <= current.right
                 && destination.top >= current.top && destination.bottom <= current.bottom;
@@ -201,7 +220,9 @@ export default function PosterWall({
             const mergedArea = (merged.right - merged.left) * (merged.bottom - merged.top);
             const destinationArea = (destination.right - destination.left)
                 * (destination.bottom - destination.top);
-            return mergedArea > destinationArea * MAX_RESERVED_VIEWPORTS ? destination : merged;
+            // 安卓按档位预留：高端3倍/均衡2倍/低端1倍视口；桌面保持上游3倍。
+            const reserveCap = perfWall?.reservedViewports ?? MAX_RESERVED_VIEWPORTS;
+            return mergedArea > destinationArea * reserveCap ? destination : merged;
         });
     }, []);
 
@@ -251,7 +272,7 @@ export default function PosterWall({
     // The posters, and on the explore wall the headings, that are drawn.
     const drawn = useMemo(() => {
         if (!measured || !opened) return { posters: [], headings: [] };
-        const visible = wallLayout.near(bounds, OVERSCAN);
+        const visible = wallLayout.near(bounds, getWallOverscan(viewportRef.current));
         if (!activePoster || visible.posters.some(instance => instance.instanceId === activePoster.instance.instanceId)) {
             return visible;
         }
@@ -275,7 +296,7 @@ export default function PosterWall({
         stopPan,
         containerRef,
         reducedMotion,
-        overscan: OVERSCAN,
+        overscan: getWallOverscan(viewportRef.current),
         bounds,
         cameraRef,
         getWorldBounds,

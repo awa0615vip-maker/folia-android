@@ -12,6 +12,7 @@ const LATTICE_POSTER_TINT_ENABLED_KEY = 'lattice_poster_tint_enabled';
 const LATTICE_POSTER_TINT_USE_CUSTOM_COLOR_KEY = 'lattice_poster_tint_use_custom_color';
 const LATTICE_POSTER_TINT_COLOR_KEY = 'lattice_poster_tint_color';
 const LATTICE_POSTER_TINT_INTENSITY_KEY = 'lattice_poster_tint_intensity';
+const LATTICE_PERFORMANCE_MODE_KEY = 'lattice_performance_mode';
 const WALL_TOOLS_QUEUE_ISLAND_OPEN_KEY = 'wall_tools_queue_island_open';
 const DEFAULT_POSTER_TINT_COLOR = '#161419';
 
@@ -26,6 +27,11 @@ const getStoredPosterTintIntensity = () => {
 };
 
 export type LatticeSettingsState = {
+    /**
+     * 拼贴性能模式（旧版优化迁移）：开启后未展开卡片的封面按最高 512px 降采样，
+     * 并省掉 lights-out/tint 叠层，播放中滑动海报墙更流畅。低端档自动等同开启。
+     */
+    latticePerformanceMode: boolean;
     latticeVignette: boolean;
     autoFocusOnSongChange: boolean;
     latticeLightsOn: boolean;
@@ -39,6 +45,7 @@ export type LatticeSettingsState = {
      * 放在这个 store 里，bravais ↔ Lattice 交接时两面墙读同一份。
      */
     wallToolsQueueIslandOpen: boolean;
+    handleToggleLatticePerformanceMode: (enabled: boolean) => void;
     handleToggleLatticeVignette: (enabled: boolean) => void;
     handleToggleAutoFocusOnSongChange: (enabled: boolean) => void;
     handleToggleLatticeLights: (enabled: boolean) => void;
@@ -50,6 +57,7 @@ export type LatticeSettingsState = {
 };
 
 export const useLatticeSettingsStore = create<LatticeSettingsState>(set => ({
+    latticePerformanceMode: getStoredBoolean(LATTICE_PERFORMANCE_MODE_KEY, true),
     latticeVignette: getStoredBoolean(LATTICE_VIGNETTE_KEY, true),
     autoFocusOnSongChange: getStoredBoolean(LATTICE_AUTO_FOCUS_ON_SONG_CHANGE_KEY, true),
     latticeLightsOn: getStoredBoolean(LATTICE_LIGHTS_ON_KEY, true),
@@ -58,6 +66,10 @@ export const useLatticeSettingsStore = create<LatticeSettingsState>(set => ({
     latticePosterTintColor: normalizePosterTintColor(getStoredString(LATTICE_POSTER_TINT_COLOR_KEY, DEFAULT_POSTER_TINT_COLOR)),
     latticePosterTintIntensity: getStoredPosterTintIntensity(),
     wallToolsQueueIslandOpen: getStoredBoolean(WALL_TOOLS_QUEUE_ISLAND_OPEN_KEY, false),
+    handleToggleLatticePerformanceMode: (enabled) => {
+        set({ latticePerformanceMode: enabled });
+        setStoredBoolean(LATTICE_PERFORMANCE_MODE_KEY, enabled);
+    },
     handleToggleLatticeVignette: (enabled) => {
         set({ latticeVignette: enabled });
         setStoredBoolean(LATTICE_VIGNETTE_KEY, enabled);

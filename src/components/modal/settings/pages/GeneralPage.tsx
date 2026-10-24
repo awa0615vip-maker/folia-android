@@ -8,6 +8,7 @@ import { usePlayerChromeSettingsStore } from '../../../../stores/usePlayerChrome
 import { selectPonderSettingsSnapshot, usePonderStore } from '../../../../stores/usePonderStore';
 import { useSettingsModalStore } from '../../../../stores/useSettingsModalStore';
 import { Button, Group, Reveal, Row, Segmented, Select, Toggle, option, type SettingsGroupDef, type SettingsOptionDef } from '../kit';
+import { AndroidGeneralSettingsSection } from './AndroidSettingsSections';
 import { FoundUpdateRow } from './FoundUpdateRow';
 import { useSettingsPage } from './settingsPageContext';
 
@@ -163,6 +164,9 @@ const GeneralPage: React.FC = () => {
                     <Toggle checked={ponder.showPonderTouchButton} onChange={ponder.setShowPonderTouchButton} />
                 </Row>
             </Group>
+
+            {/* 安卓专属：自适应屏幕分辨率 / 全沉浸 / 屏幕常亮 / 手机适配（仅安卓 WebView 渲染）。 */}
+            <AndroidGeneralSettingsSection />
         </>
     );
 };

@@ -1787,6 +1787,18 @@ export default {
     "lyricMatchPriorityDesc": "When multiple lyric sources have high-confidence matches, prefer this source first."
   },
   "options": {
+    "adaptiveDisplay": "Adaptive screen resolution",
+    "adaptiveDisplayDesc": "When on, the system bars are hidden and the interface fills the whole screen; when off, the native layout is kept. If the device forces a fixed aspect ratio, turn off its app compatibility mode in the system settings.",
+    "immersiveMode": "Full immersive mode",
+    "immersiveModeDesc": "Applies to the player view only: it auto-hides the control bar, the up-next card, the command palette button, and the right-side gear/panel button for a cleaner stage. Playlist and song browsing screens are unaffected. Turning it off restores the command palette button; if Auto hide was already on, it keeps hiding automatically.",
+    "phoneFit": "Phone layout fit",
+    "phoneFitDesc": "Forces the compact phone layout so tabs, settings, and audio effects stay inside the screen on landscape or high-resolution phones. Off by default and does not alter the upstream desktop layout.",
+    "keepScreenOn": "Keep screen on",
+    "keepScreenOnDesc": "Stops the screen from sleeping while the app is open, so lyrics stay readable on a stand or while you copy them. Turn it off to restore the system auto-sleep.",
+    "orientationFit": "Portrait / landscape fit",
+    "orientationFitDesc": "Off locks portrait compatibility; on switches to and locks landscape compatibility. It only applies while Phone layout fit is enabled.",
+    "orientationPortrait": "Current: portrait fit",
+    "orientationLandscape": "Current: landscape fit",
     "aiProvider_gemini": "Google Gemini",
     "aiProvider_deepseek": "DeepSeek",
     "aiProvider_mimo": "Xiaomi MiMo",

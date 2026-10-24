@@ -10,6 +10,7 @@ import { useVisualizerSettingsStore } from '../../../../stores/useVisualizerSett
 import { VISUALIZER_FRAME_RATE_OPTIONS } from '../../../../utils/frameRateLimiter';
 import { Group, Link, Reveal, Row, Segmented, Toggle, option, useSettingsKitTheme, type SettingsGroupDef, type SettingsOptionDef } from '../kit';
 import { GpuPreferenceRow } from './graphics/GpuPreferenceRow';
+import { AndroidUpdateSettingsSection } from './AndroidSettingsSections';
 import { useSettingsPage } from './settingsPageContext';
 
 // src/components/modal/settings/pages/GraphicsPage.tsx
@@ -170,6 +171,9 @@ const GraphicsPage: React.FC = () => {
                 }}
                 onClose={() => setNativeBlurAsking(false)}
             />
+
+            {/* 安卓专属：当前版本 + 应用内更新（检查 GitHub Releases → 下载 → 安装，仅安卓 WebView 渲染）。 */}
+            <AndroidUpdateSettingsSection />
         </>
     );
 };

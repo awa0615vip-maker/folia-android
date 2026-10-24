@@ -1787,6 +1787,18 @@ export default {
     "lyricMatchPriorityDesc": "在多个歌词源都存在高置信度匹配时，优先选择该歌词源的结果。"
   },
   "options": {
+    "adaptiveDisplay": "自适应屏幕分辨率",
+    "adaptiveDisplayDesc": "打开后隐藏系统栏、画面铺满整屏；关闭则跟随系统原生布局。若设备强制按固定比例显示，需要到系统的应用显示比例设置里关闭兼容模式。",
+    "immersiveMode": "全沉浸模式",
+    "immersiveModeDesc": "只在播放界面生效：自动收起控制条、即将播放卡片、命令面板按钮和右侧齿轮/面板按钮，让画面更干净。浏览歌单和歌曲的界面不受影响。关闭后命令面板按钮恢复显示；若“自动隐藏命令面板按钮”本来就是打开的，则继续保持自动隐藏。",
+    "phoneFit": "手机适配",
+    "phoneFitDesc": "强制使用紧凑的手机布局，避免横屏或高分辨率手机上选项卡、设置和音频效果器超出屏幕。默认关闭，不影响上游原有桌面布局。",
+    "keepScreenOn": "屏幕常亮",
+    "keepScreenOnDesc": "打开后不再自动息屏，看歌词、抄歌词或放在桌上时屏幕保持点亮。关掉就恢复系统的自动息屏。",
+    "orientationFit": "横竖屏兼容",
+    "orientationFitDesc": "关闭时锁定竖屏兼容，打开后强制切换并锁定横屏兼容；只会在手机适配开启时生效。",
+    "orientationPortrait": "当前：竖屏兼容",
+    "orientationLandscape": "当前：横屏兼容",
     "aiProvider_gemini": "Google Gemini",
     "aiProvider_deepseek": "DeepSeek",
     "aiProvider_mimo": "小米 MiMo",

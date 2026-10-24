@@ -1787,6 +1787,18 @@ export default {
     "lyricMatchPriorityDesc": "Saat beberapa sumber lirik memiliki kecocokan berkualitas tinggi, utamakan sumber ini terlebih dahulu."
   },
   "options": {
+    "adaptiveDisplay": "Resolusi layar adaptif",
+    "adaptiveDisplayDesc": "Saat aktif, bilah sistem disembunyikan dan antarmuka memenuhi seluruh layar; saat nonaktif, tata letak bawaan sistem dipertahankan. Jika perangkat memaksa rasio tetap, matikan mode kompatibilitas aplikasi di pengaturan sistem.",
+    "immersiveMode": "Mode imersif penuh",
+    "immersiveModeDesc": "Hanya berlaku di tampilan pemutar: bilah kontrol, kartu lagu berikutnya, tombol palette perintah, dan tombol gerigi/panel kanan disembunyikan otomatis agar panggung lebih bersih. Layar jelajah playlist dan lagu tidak terpengaruh. Saat dimatikan, tombol palette perintah tampil kembali; jika Sembunyikan otomatis sudah aktif, tombol tetap tersembunyi otomatis.",
+    "phoneFit": "Tata letak ponsel",
+    "phoneFitDesc": "Memaksa tata letak ponsel yang ringkas agar tab, pengaturan, dan efek audio tetap muat di layar ponsel lanskap atau beresolusi tinggi. Nonaktif secara bawaan dan tidak mengubah tata letak desktop upstream.",
+    "keepScreenOn": "Tetap nyalakan layar",
+    "keepScreenOnDesc": "Menjaga layar tetap menyala saat aplikasi terbuka agar lirik tetap terlihat. Matikan untuk kembali ke mode tidur otomatis sistem.",
+    "orientationFit": "Kompatibilitas potret / lanskap",
+    "orientationFitDesc": "Nonaktif mengunci kompatibilitas potret; aktif beralih ke dan mengunci kompatibilitas lanskap. Hanya berlaku saat Tata letak ponsel aktif.",
+    "orientationPortrait": "Saat ini: potret",
+    "orientationLandscape": "Saat ini: lanskap",
     "aiProvider_gemini": "Google Gemini",
     "aiProvider_deepseek": "DeepSeek",
     "aiProvider_mimo": "Xiaomi MiMo",

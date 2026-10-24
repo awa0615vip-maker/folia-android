@@ -6,6 +6,8 @@ import './styles/perfTier.css';
 import App from './App';
 // 副作用 import：安卓自适应性能引擎在模块加载时探测硬件并把 `<html data-perf-tier>` 写好，第一帧即按档位渲染。
 import './stores/usePerformanceTierStore';
+// 档位切换的运行时联动：用户手动切档后，视觉器帧率等即时参数随档位跟过去（用户手动设过的不覆盖）。
+import { installPerformanceRuntime } from './utils/performanceRuntime';
 import AppSplashGate from './components/AppSplashGate';
 import RemoteControlApp from './components/remote/RemoteControlApp';
 import ObsBrowserSourceApp from './components/obs/ObsBrowserSourceApp';
@@ -116,5 +118,6 @@ void Promise.allSettled([bootFolium(), bootNavidrome()])
     })
     .finally(() => {
         initializeLocalCoverRuntime();
+        installPerformanceRuntime();
         renderApp();
     });

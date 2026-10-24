@@ -12,6 +12,12 @@ import { useLatticeExpansionSettled } from './useLatticeExpansionSettled';
 import { prewarmLatticeLyrics } from './lyrics/prewarmLatticeLyrics';
 import { prewarmWallPosterArtwork, useWallPosterArtwork } from '../../wall/useWallPosterArtwork';
 import { countRender } from '../../../dev/renderCount';
+import { useLatticeSettingsStore } from '../../../stores/useLatticeSettingsStore';
+import { resolveEffectiveTier, usePerformanceTierStore } from '../../../stores/usePerformanceTierStore';
+// 自适应性能引擎（旧版优化迁移）：低端档封面降采样封顶值。性能模式（手动开启或低端档）下
+// 未展开的卡片只按最多 512px 取封面，避免高 DPR 屏每张卡都解一张大一档的图；同时省掉
+// lights-out / tint 两个叠层，减轻播放中滑动海报墙的合成压力。
+const PERFORMANCE_COVER_MAX_PX = 512;
 import {
     WALL_HANDOFF_FLIP_IN_MS,
     WALL_HANDOFF_FLIP_OUT_MS,
@@ -177,7 +183,16 @@ function LatticePoster({
     // The artwork only has to cover the card's own box, and a square cover is scaled to the longer
     // edge. Both inputs are discrete - gears are integer spans and the camera only rescales on a
     // breakpoint - so this is not a per-frame value even while the card animates towards the size.
-    const coverUrl = useWallPosterArtwork(tile.coverUrl, Math.max(rect.width, rect.height) * pixelScale);
+    // 自适应性能引擎：手动性能模式或低端档时，未展开卡片封面像素封顶，高 DPR 屏不再逐卡解大图。
+    const manualPerformanceMode = useLatticeSettingsStore(state => state.latticePerformanceMode);
+    const effectiveTier = usePerformanceTierStore(state => resolveEffectiveTier(state));
+    const performanceMode = manualPerformanceMode || effectiveTier === 'low';
+    const lightsOn = useLatticeSettingsStore(state => state.latticeLightsOn);
+    const coverTargetPx = Math.max(rect.width, rect.height) * pixelScale;
+    const coverUrl = useWallPosterArtwork(
+        tile.coverUrl,
+        performanceMode && !expanded ? Math.min(coverTargetPx, PERFORMANCE_COVER_MAX_PX) : coverTargetPx,
+    );
     // Hover and press are the last moments before the open: warming here keeps the lyric chunk,
     // the Pixi module and the first shader compile off the click path.
     const warmLyrics = () => { if (isCurrent) prewarmLatticeLyrics(); };
@@ -311,8 +326,11 @@ function LatticePoster({
                 <img className="lattice-poster-cover" src={coverUrl} alt="" draggable={false} decoding="sync" />
             )}
             <span className="lattice-poster-shade" {...(isFlightEnd ? { [MORPH_SHADE_ATTR]: '' } : {})} />
-            <span className="lattice-poster-lights-out" />
-            <span className="lattice-poster-tint" />
+            {/* 低端档/性能模式：省掉 lights-out 与 tint 两个叠层，减少播放中滑动海报墙的合成压力。 */}
+            {(!performanceMode || !lightsOn) && (
+                <span className="lattice-poster-lights-out" />
+            )}
+            {!performanceMode && <span className="lattice-poster-tint" />}
             <span className={`lattice-poster-badge ${isCurrent ? 'is-current' : ''}`}>
                 {isCurrent && <>{t('home.latticeBadgeNow')} · </>}
                 {/* An entry of the explore page says what it is where a queue tile has its number;
