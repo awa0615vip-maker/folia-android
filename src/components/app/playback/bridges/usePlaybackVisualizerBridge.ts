@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import type { MutableRefObject } from 'react';
 import type { MotionValue } from 'framer-motion';
 import { findLatestActiveLineIndex } from '../../../../utils/appPlaybackHelpers';
+import { IS_ANDROID_WEBVIEW } from '../../../../utils/platform';
 import { PlayerState } from '../../../../types';
 import type { AudioBands, LyricData } from '../../../../types';
 import { setCurrentLineIndex, setHandoffLineIndex, setPlayerState } from '../../../../stores/usePlaybackStore';
@@ -102,6 +103,8 @@ export function usePlaybackVisualizerBridge({
     const incomingLyrics = usePlaybackStore(state => state.lyrics);
 
     const currentLineIndexRef = useRef(-1);
+    // 复用的频谱缓冲：避免每帧 new Uint8Array（60fps 下每秒 ~120KB 分配 + GC 压力）。
+    const frequencyDataRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
     // 智能动感模式: loads the track's beats while it is on; the clock is stepped below. A ref, so
     // switching it does not rebuild the frame loop.
     const beatFxWantedRef = useRef(false);
@@ -247,7 +250,11 @@ export function usePlaybackVisualizerBridge({
             // The bands keep their last values: nothing draws from them while held.
         } else if (hasAudibleSignal && analyserRef.current) {
             const bufferLength = analyserRef.current.frequencyBinCount;
-            const dataArray = new Uint8Array(bufferLength);
+            let dataArray = frequencyDataRef.current;
+            if (!dataArray || dataArray.length !== bufferLength) {
+                dataArray = new Uint8Array(bufferLength);
+                frequencyDataRef.current = dataArray;
+            }
             analyserRef.current.getByteFrequencyData(dataArray);
             audioBands.spectrum?.set(dataArray);
 
@@ -407,7 +414,15 @@ export function usePlaybackVisualizerBridge({
     // moment the hold lets go, one pass runs at once, so the lyrics have caught up before anything reads them.
     useEffect(() => {
         let heldTimer: number | undefined;
-        const tick = () => {
+        // 安卓 30fps 上限：歌词行切换/频谱可视化在手机上 30fps 观感无差，主线程与 GPU 负载减半。
+        const frameIntervalMs = IS_ANDROID_WEBVIEW ? 1000 / 30 : 0;
+        let lastFrameTime = 0;
+        const tick = (frameTime: number) => {
+            if (frameIntervalMs > 0 && lastFrameTime > 0 && frameTime - lastFrameTime < frameIntervalMs) {
+                animationFrameRef.current = requestAnimationFrame(tick);
+                return;
+            }
+            lastFrameTime = frameTime;
             updateLoop();
             schedule();
         };
@@ -433,7 +448,7 @@ export function usePlaybackVisualizerBridge({
             // against that, or a new song's first line that happens to match the held one is never written.
             if (!state.held) currentLineIndexRef.current = usePlaybackStore.getState().currentLineIndex;
             cancel();
-            tick();
+            tick(performance.now());
         });
         return () => {
             unsubscribeHold();

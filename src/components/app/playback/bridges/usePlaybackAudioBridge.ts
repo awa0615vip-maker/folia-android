@@ -210,11 +210,13 @@ export function usePlaybackAudioBridge({
 
         try {
             const AudioContextClass = window.AudioContext || (window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-            const ctx = new AudioContextClass();
+            // latencyHint 'playback'：音频线程以省电/低负载优先，进一步压低 WebView 音频开销。
+            const ctx = new AudioContextClass({ latencyHint: 'playback' });
             audioContextRef.current = ctx;
 
+            // fftSize 1024（频率分辨率 512 档）足够频谱可视化，比 2048 减半 FFT 开销。
             const analyser = ctx.createAnalyser();
-            analyser.fftSize = 2048;
+            analyser.fftSize = 1024;
             analyser.smoothingTimeConstant = 0.6;
             analyserRef.current = analyser;
 

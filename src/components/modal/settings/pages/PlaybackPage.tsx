@@ -32,6 +32,7 @@ const O = {
     animationRing: option(TRANSITION, 'transitionAnimationRing', 'options.transitionAnimationRing'),
     animationCard: option(TRANSITION, 'transitionAnimationCard', 'options.transitionAnimationCard'),
     outputDevice: option(SOUND, 'audioOutputDevice', 'options.audioOutputDevice'),
+    engine: option(SOUND, 'audioEngine', 'options.audioEngine'),
     replayGain: option(SOUND, 'replayGainSettings', 'options.replayGainMode'),
     fade: option(SOUND, 'playbackFade', 'options.playbackFade'),
     transcode: option(SOUND, 'transcodeFallback', 'options.transcodeFallback', { electronOnly: true }),
@@ -72,11 +73,13 @@ const PlaybackPage: React.FC = () => {
     })));
     const audio = useAudioSettingsStore(useShallow(state => ({
         mediaCache: state.enableMediaCache,
+        engineMode: state.audioEngineMode,
         fade: state.playbackFadeEnabled,
         transcode: state.enableTranscodeFallback,
         queueBehavior: state.queueAddBehavior,
         autoSkipUnplayable: state.autoSkipUnplayable,
         setMediaCache: state.handleToggleMediaCache,
+        setEngineMode: state.setAudioEngineMode,
         setFade: state.handleTogglePlaybackFade,
         setTranscode: state.handleToggleTranscodeFallback,
         setQueueBehavior: state.handleSetQueueAddBehavior,
@@ -190,6 +193,16 @@ const PlaybackPage: React.FC = () => {
 
             <Group def={SOUND}>
                 <AudioOutputDeviceRow option={O.outputDevice} onDeviceChange={onAudioOutputDeviceChange} />
+                <Row option={O.engine} hint={t('options.audioEngineDesc')}>
+                    <Segmented
+                        value={audio.engineMode}
+                        options={[
+                            { value: 'direct', label: t('options.audioEngineDirect') },
+                            { value: 'webaudio', label: t('options.audioEngineWebaudio') },
+                        ]}
+                        onChange={audio.setEngineMode}
+                    />
+                </Row>
                 <Row option={O.replayGain} note={t('options.replayGainModeDesc')}>
                     <Segmented
                         value={replayGainMode}

@@ -8,6 +8,7 @@ import { createLatticeLineView, type LatticeLineView } from './latticeLyricScene
 import { createLatticeEdgeFilter } from './latticeLyricFilters';
 import { createLatticeTimeline, stepLatticeSpring } from './latticeLyricTimeline';
 import { createLatticeLyricFrameLoop } from './latticeLyricFrameLoop';
+import { IS_ANDROID_WEBVIEW } from '../../../../utils/platform';
 import type { LatticeLyricInput, LatticeLyricRuntime } from './types';
 import { resolveSingleTrackSubtitleMode } from '../../../../utils/lyrics/alternateText';
 
@@ -141,7 +142,8 @@ function attachRuntime(pixi: typeof import('pixi.js'), app: import('pixi.js').Ap
             return moving;
         } catch (error) { reportError(error); return false; }
     };
-    const loop = createLatticeLyricFrameLoop(draw);
+    // 安卓 WebView 上歌词动画 30fps 足够顺滑，GPU/主线程负载减半，播放更稳。
+    const loop = createLatticeLyricFrameLoop(draw, requestAnimationFrame, cancelAnimationFrame, IS_ANDROID_WEBVIEW ? 30 : 60);
     let unsubscribe = input.currentTime.on('change', loop.wake);
     const runtime: LatticeLyricRuntime = {
         attach(nextHost) {

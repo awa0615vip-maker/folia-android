@@ -1797,6 +1797,10 @@ export default {
     "keepScreenOn": "Keep screen on",
     "keepScreenOnDesc": "Stops the screen from sleeping while the app is open, so lyrics stay readable on a stand or while you copy them. Turn it off to restore the system auto-sleep.",
 
+    "audioEngine": "Playback engine",
+    "audioEngineDesc": "Direct: audio goes straight to the hardware, bypassing WebAudio - smoothest and most efficient, recommended on Android; the equalizer, spectrum and effects do not apply in direct mode. Full engine: equalizer, spectrum visualization and effects all available (Android WebView online playback may stutter - switch back to direct if it does).",
+    "audioEngineDirect": "Direct (smoothness)",
+    "audioEngineWebaudio": "Full engine (EQ/spectrum)",
     "batteryOptimization": "Unrestricted background",
     "batteryOptimizationDesc": "Stops the system from killing playback when locked or in the background. When not granted, a prompt appears on launch (once per 3 days); Xiaomi/HyperOS also requires autostart permission.",
     "batteryExempted": "Unrestricted background granted",

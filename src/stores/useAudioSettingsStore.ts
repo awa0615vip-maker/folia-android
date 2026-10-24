@@ -6,6 +6,7 @@
 // they are audio-output state, and this is their nearest owner until the Phase B transport store
 // exists — at which point they may move once more.
 
+import { IS_ANDROID_WEBVIEW } from '../utils/platform';
 import { create } from 'zustand';
 import type { AudioQualityPreference } from '../types/onlineMusic';
 import { type QueueAddBehavior } from '../types';
@@ -198,7 +199,13 @@ const readStoredAudioEngineMode = (): 'webaudio' | 'direct' => {
         return 'webaudio';
     }
     const saved = localStorage.getItem('player_audio_engine_mode');
-    return saved === 'direct' ? 'direct' : 'webaudio';
+    if (saved === 'webaudio' || saved === 'direct') {
+        return saved;
+    }
+    // 未显式设置过。安卓 WebView 里 <audio> 过 WebAudio 图（MediaElementSource）会被重采样，
+    // 全链路 DSP 是播放卡顿/杂音/电音的来源，所以安卓默认直出（audio 直连硬件）；桌面端
+    // WebAudio 无此问题，默认完整引擎以保留均衡器/频谱可视化/音效链。
+    return IS_ANDROID_WEBVIEW ? 'direct' : 'webaudio';
 };
 
 export type AudioSettingsState = {

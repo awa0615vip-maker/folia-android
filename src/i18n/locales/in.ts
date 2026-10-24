@@ -1797,6 +1797,10 @@ export default {
     "keepScreenOn": "Tetap nyalakan layar",
     "keepScreenOnDesc": "Menjaga layar tetap menyala saat aplikasi terbuka agar lirik tetap terlihat. Matikan untuk kembali ke mode tidur otomatis sistem.",
 
+    "audioEngine": "播放引擎",
+    "audioEngineDesc": "直出：声音绕开 WebAudio 直达硬件，最流畅、最省电，适合安卓手机；均衡器/频谱/音效在直出下不生效。完整引擎：均衡器、频谱可视化、音效链全部可用（安卓 WebView 在线播放时可能卡顿，卡顿就切回直出）。",
+    "audioEngineDirect": "直出（流畅优先）",
+    "audioEngineWebaudio": "完整引擎（均衡器/频谱）",
     "batteryOptimization": "后台无限制",
     "batteryOptimizationDesc": "授权后系统不会在锁屏或后台时杀掉音乐播放。未授权时会启动时自动弹窗提醒（每 3 天一次）；小米 / HyperOS 还需在系统设置里允许自启动。",
     "batteryExempted": "已获得后台无限制",

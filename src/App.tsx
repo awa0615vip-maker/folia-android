@@ -2450,6 +2450,7 @@ export default function App() {
             src={automix.deckSrc(deck)}
             preload="auto"
             crossOrigin="anonymous"
+            playsInline
             loop={effectiveLoopMode === 'one' && automix.activeDeck === deck}
             onLoadStart={(e) => {
                 // Silent unless the invariant breaks. A deck is only ever handed the source the
