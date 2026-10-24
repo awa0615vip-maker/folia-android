@@ -3,6 +3,7 @@ import { OnlineProviderError } from '../../../types/onlineMusic';
 import { readProviderSessionValue, removeProviderSessionValue, writeProviderSessionValue } from '../providerStorage';
 import { lyricProxyWebUrl, requestLyricProxyOnDesktop } from '../../lyricProxy';
 import { withLoginRequestLimit } from '../login/loginRequestLimit';
+import { requestKugouDirect, requestKugouLegacyPlayInfoDirect } from './kugouDirectTransport';
 
 // src/services/onlineMusic/kugou/kugouTransport.ts
 
@@ -351,6 +352,11 @@ export const requestKugouLegacyPlayInfo = async (hash: string): Promise<any> => 
     targetUrl.searchParams.set('hash', hash);
     const targetUrlString = targetUrl.toString();
 
+    // 安卓（无 Electron、无 Web 后端）直连 m.kugou.com 的旧移动端点（OkHttp 桥放行 *.kugou.com）。
+    if (typeof window !== 'undefined' && !window.electron && !getWebApiBase()) {
+        return requestKugouLegacyPlayInfoDirect(hash);
+    }
+
     // In Electron, route through the main-process lyric proxy so CORS cannot block this
     // last-resort mobile endpoint. The Web build uses the same relay through its web address.
     const relayed = requestLyricProxyOnDesktop(targetUrlString, { method: 'GET' });
@@ -433,9 +439,9 @@ const persistElectronAccountHint = (operation: KugouOperation, response: any): v
 
 export const getKugouTransportAvailability = () => {
     if (typeof window !== 'undefined' && window.electron?.kugouRequest) return { configured: true } as const;
-    return getWebApiBase()
-        ? { configured: true } as const
-        : { configured: false, reason: 'not-configured' as const };
+    // 安卓（无 Electron、无自部署后端）也能用：本地直连酷狗官方接口。
+    if (getWebApiBase()) return { configured: true } as const;
+    return { configured: true, mode: 'direct' } as const;
 };
 
 // Routes one provider request through Electron IPC or an explicitly configured Web backend.
@@ -464,7 +470,8 @@ export const requestKugou = async <T = unknown>(operation: KugouOperation, param
 
     const base = getWebApiBase();
     if (!base) {
-        throw new OnlineProviderError('unavailable', KUGOU_API_BASE_MISSING, 'kugou');
+        // 安卓直连模式：本地签名直接请求酷狗官方接口，返回与后端一致的 JSON。
+        return requestKugouDirect(operation, params);
     }
     const execute = async (targetOperation: KugouOperation, targetParams: KugouParams): Promise<any> => {
         const query = new URLSearchParams();

@@ -16,8 +16,13 @@ import { lyricProxyWebUrl } from '../../lyricProxy';
 
 const isElectron = typeof window !== 'undefined' && (window as any).electron;
 
+// 安卓（无 Electron、无 Web 后端）：直连 QQ 官方接口（原生 OkHttp 桥放行 *.qq.com，无 CORS）。
+const canDirectQqFetch = (): boolean => (
+    typeof window !== 'undefined' && !isElectron && !((window as any).location?.href ?? '').startsWith('http')
+);
+
 /**
- * Sends a POST request to u.y.qq.com via proxy or directly in Electron.
+ * Sends a POST request to u.y.qq.com via proxy or directly in Electron/Android.
  */
 async function requestQQ(method: string, module: string, param: any): Promise<any> {
   const payload = {
@@ -41,11 +46,11 @@ async function requestQQ(method: string, module: string, param: any): Promise<an
   };
 
   const targetUrl = 'https://u.y.qq.com/cgi-bin/musicu.fcg';
-  const url = isElectron ? targetUrl : lyricProxyWebUrl(targetUrl);
+  const url = (isElectron || canDirectQqFetch()) ? targetUrl : lyricProxyWebUrl(targetUrl);
 
   const response = await fetch(url, {
     method: 'POST',
-    credentials: isElectron ? 'omit' : 'same-origin',
+    credentials: (isElectron || canDirectQqFetch()) ? 'omit' : 'same-origin',
     headers: {
       'Content-Type': 'application/json',
       'Cookie': 'tmeLoginType=-1;',

@@ -4,6 +4,7 @@ import { withLoginRequestLimit } from '../login/loginRequestLimit';
 import { withOnlineRequestLimit } from '../failure/onlineRequestLimit';
 import { lyricProxyWebUrl } from '../../lyricProxy';
 import { errorMessage } from '../../../utils/errorText';
+import { requestQqDirect } from './qqDirectTransport';
 
 // src/services/onlineMusic/qq/qqTransport.ts
 
@@ -333,9 +334,9 @@ export const getQqRemoteApiBase = (): string | null => (getElectronQqPortReader(
 
 export const getQqTransportAvailability = () => {
     if (getElectronQqPortReader()) return { configured: true } as const;
-    return getWebApiBase()
-        ? { configured: true } as const
-        : { configured: false, reason: 'not-configured' as const };
+    if (getWebApiBase()) return { configured: true } as const;
+    // 安卓直连模式：无后端也能搜索与试听。
+    return { configured: true, mode: 'direct' } as const;
 };
 
 const endpointFor = (operation: QqOperation, params: QqParams): { path: string; query: QqParams } => {
@@ -410,7 +411,16 @@ export const requestQq = async <T = unknown>(
         );
     }
     const stored = getWebSessionCookie();
-    const base = await resolveApiBase();
+    let base: string;
+    try {
+        base = await resolveApiBase();
+    } catch (error) {
+        // 安卓（无 Electron、无自部署后端）：本地直连 QQ 官方接口。
+        if (error instanceof OnlineProviderError && error.message === QQ_API_BASE_MISSING) {
+            return requestQqDirect(operation, { ...params, ...(payload ?? {}) });
+        }
+        throw error;
+    }
     // The session parked for this run is not sent (isQqSessionParked). The status is read once the backend has a port.
     const cookie = stored && await isQqSessionStoreUnreadable() ? '' : stored;
 

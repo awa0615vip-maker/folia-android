@@ -6,7 +6,8 @@
     pointer-events: none;
     opacity: 0;
 }
-.lattice-lyrics.is-ready { opacity: 1; }
+.lattice-lyrics.is-ready { opacity: 1; transition: opacity 0.24s ease-in-out; }
+.lattice-lyrics.is-pending-reveal { opacity: 0 !important; }
 .lattice-lyrics-canvas { position: absolute; inset: 0; overflow: hidden; }
 .lattice-lyrics-canvas canvas { display: block; width: 100%; height: 100%; }
 .lattice-root .lattice-poster.is-expanded .lattice-lyric-metadata {

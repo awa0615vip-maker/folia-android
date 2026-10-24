@@ -11,7 +11,7 @@ import './LatticeLyrics.css';
 // 或渲染线程挂起），强制降级为纯文本歌词行渲染，保证界面不再出现全黑、无内容可看。
 const FALLBACK_DELAY_MS = 4000;
 
-export default function LatticeLyrics({ tile, reducedMotion }: { tile: LatticeTile; reducedMotion: boolean }) {
+export default function LatticeLyrics({ tile, reducedMotion, reveal = true }: { tile: LatticeTile; reducedMotion: boolean; reveal?: boolean }) {
     const source = useLatticeLyrics();
     const fontsEpoch = useFontsEpoch();
     const host = useRef<HTMLDivElement>(null);
@@ -39,7 +39,7 @@ export default function LatticeLyrics({ tile, reducedMotion }: { tile: LatticeTi
                 <strong>{tile.title}</strong><small>{tile.artist}</small>
             </motion.span>
         </AnimatePresence>
-        <div className={`lattice-lyrics ${showCanvas ? 'is-ready' : ''}`}>
+        <div className={`lattice-lyrics ${showCanvas ? 'is-ready' : ''} ${reveal ? 'is-revealed' : 'is-pending-reveal'}`}>
             <div ref={host} className="lattice-lyrics-canvas" aria-hidden="true" />
             {showCanvas && <span className="sr-only">{line?.fullText}</span>}
             {!showCanvas && fellBack && input && (

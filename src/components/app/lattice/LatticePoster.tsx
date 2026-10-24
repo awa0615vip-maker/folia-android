@@ -1,5 +1,5 @@
 import { WallTitle } from '../../wall/WallTitle';
-import { lazy, memo, Suspense, useMemo } from 'react';
+import { lazy, memo, Suspense, useEffect, useMemo, useState } from 'react';
 import { motion, type TransformProperties } from 'framer-motion';
 import { ArrowUpRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -41,6 +41,10 @@ import { useFlightBackTo } from './wallFlight';
 // Such a poster also carries a class for what it is (`is-kind-…`), by which Lattice.css marks
 // its cover while it is not grown.
 const LatticeLyrics = lazy(() => import('./lyrics/LatticeLyrics'));
+
+// 进入歌词视图前的预渲染等待：卡片展开后先给歌词画布 2 秒初始化（WebGL context、字体、
+// 首帧排版），就绪后再把歌词显示出来，避免进入瞬间黑屏一闪与渲染卡顿。
+const LYRIC_PRE_RENDER_MS = 2000;
 
 type LatticePosterProps = {
     instanceId: string;
@@ -180,6 +184,18 @@ function LatticePoster({
     // The lyric scene is a Pixi renderer whose layout is rebuilt from the card's box, so mounting it
     // mid-expansion would rasterize every line once per animation frame. It waits for the spring.
     const [expansionSettled, onExpansionComplete] = useLatticeExpansionSettled(expanded, Boolean(reducedMotion));
+    // 歌词预渲染门控：卡片展开为当前曲目后，画布立即挂载并初始化，但视觉上先等待
+    // LYRIC_PRE_RENDER_MS，让 WebGL 与首帧排版就绪后再显示歌词，进入时不黑屏、不卡顿。
+    const lyricGate = expanded && expansionSettled && isCurrent;
+    const [lyricRevealed, setLyricRevealed] = useState(false);
+    useEffect(() => {
+        if (!lyricGate) {
+            setLyricRevealed(false);
+            return;
+        }
+        const timer = window.setTimeout(() => setLyricRevealed(true), LYRIC_PRE_RENDER_MS);
+        return () => window.clearTimeout(timer);
+    }, [lyricGate]);
     // The artwork only has to cover the card's own box, and a square cover is scaled to the longer
     // edge. Both inputs are discrete - gears are integer spans and the camera only rescales on a
     // breakpoint - so this is not a per-frame value even while the card animates towards the size.
@@ -341,7 +357,7 @@ function LatticePoster({
             </span>
             {expanded && expansionSettled && isCurrent ? (
                 <Suspense fallback={<span className="lattice-poster-copy"><WallTitle title={tile.title} expanded={expanded} targetPosterWidth={rect.width} /><small>{tile.artist}</small></span>}>
-                    <LatticeLyrics key={tile.id} tile={tile} reducedMotion={Boolean(reducedMotion)} />
+                    <LatticeLyrics key={tile.id} tile={tile} reducedMotion={Boolean(reducedMotion)} reveal={lyricRevealed} />
                 </Suspense>
             ) : <span className="lattice-poster-copy">
                 {/* `rect` is the slot the card is heading for, in world units, so the title is fitted
