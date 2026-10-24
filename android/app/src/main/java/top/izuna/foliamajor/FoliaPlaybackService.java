@@ -63,6 +63,10 @@ public class FoliaPlaybackService extends Service {
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
     private static volatile String powerDiagnostic = "inactive";
+    /** 原生播放器是否正在播放（供桥查询：前台自愈用）。 */
+    private static volatile boolean nativePlayingFlag = false;
+
+    public static boolean isNativePlaying() { return nativePlayingFlag; }
 
     // 音频焦点：显式向系统声明“本应用正在播放媒体”。华为/鸿蒙等 ROM 对 WebView 后台冻结尤其激进，
     // 没有音频焦点时系统更容易在切后台后挂起 WebView 里的音频流；持有焦点后后台播放稳定得多。
@@ -141,6 +145,7 @@ public class FoliaPlaybackService extends Service {
                 if (positionMs > 0) p.seekTo((int) positionMs);
                 p.start();
                 nativePlaying = true;
+                nativePlayingFlag = true;
                 requestAudioFocus();
                 updatePlaybackLocks(true);
                 progressHandler.removeCallbacks(progressPoller);
@@ -149,11 +154,13 @@ public class FoliaPlaybackService extends Service {
             });
             player.setOnCompletionListener(p -> {
                 nativePlaying = false;
+                nativePlayingFlag = false;
                 progressHandler.removeCallbacks(progressPoller);
                 FoliaNativePlugin.emitNativeEnded();
             });
             player.setOnErrorListener((p, what, extra) -> {
                 nativePlaying = false;
+                nativePlayingFlag = false;
                 progressHandler.removeCallbacks(progressPoller);
                 updatePlaybackLocks(false);
                 FoliaNativePlugin.emitNativeError("media-error:" + what + ":" + extra);
@@ -228,6 +235,7 @@ public class FoliaPlaybackService extends Service {
 
     public void pauseNative() {
         nativePlaying = false;
+        nativePlayingFlag = false;
         progressHandler.removeCallbacks(progressPoller);
         if (mediaPlayer != null && mediaPlayer.isPlaying()) {
             mediaPlayer.pause();
@@ -241,6 +249,7 @@ public class FoliaPlaybackService extends Service {
         try {
             mediaPlayer.start();
             nativePlaying = true;
+            nativePlayingFlag = true;
             requestAudioFocus();
             updatePlaybackLocks(true);
             progressHandler.post(progressPoller);
@@ -256,12 +265,9 @@ public class FoliaPlaybackService extends Service {
         } catch (Exception ignored) { }
     }
 
-    public boolean isNativePlaying() {
-        return nativePlaying;
-    }
-
     public void stopNativePlayer() {
         nativePlaying = false;
+        nativePlayingFlag = false;
         progressHandler.removeCallbacks(progressPoller);
         releaseNativePlayer();
         updatePlaybackLocks(false);

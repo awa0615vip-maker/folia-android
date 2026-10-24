@@ -8,6 +8,7 @@ type FoliaNativePlugin = {
     resumeNativePlayback: () => Promise<unknown>;
     seekNativePlayback: (options: { position: number }) => Promise<unknown>;
     stopNativePlayback: () => Promise<unknown>;
+    isNativePlaying: () => Promise<{ playing: boolean }>;
     isIgnoringBatteryOptimizations: () => Promise<{ ignoring: boolean }>;
     requestIgnoreBatteryOptimizations: () => Promise<{ alreadyIgnoring?: boolean }>;
     addListener: (
@@ -50,6 +51,13 @@ export const seekNativeEnginePlayback = (positionMs: number): Promise<void> =>
 
 export const stopNativeEnginePlayback = (): Promise<void> =>
     safeCall((plugin) => plugin.stopNativePlayback().then(() => undefined), undefined);
+
+/** 原生播放器是否正在播放（后台回前台自愈用）。 */
+export const isNativeEnginePlaying = (): Promise<boolean> =>
+    safeCall(async (plugin) => {
+        const result = await plugin.isNativePlaying();
+        return Boolean(result?.playing);
+    }, false);
 
 /** 是否已获得电池优化豁免。 */
 export const isIgnoringBatteryOptimizations = (): Promise<boolean> =>

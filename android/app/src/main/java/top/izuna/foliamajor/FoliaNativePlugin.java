@@ -1314,6 +1314,14 @@ public class FoliaNativePlugin extends Plugin {
         call.resolve();
     }
 
+    /** 原生播放器是否正在播放（Web 层后台回前台自愈用）。 */
+    @PluginMethod
+    public void isNativePlaying(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("playing", FoliaPlaybackService.isNativePlaying());
+        call.resolve(result);
+    }
+
     /** 是否已获得电池优化豁免（白名单）。 */
     @PluginMethod
     public void isIgnoringBatteryOptimizations(PluginCall call) {

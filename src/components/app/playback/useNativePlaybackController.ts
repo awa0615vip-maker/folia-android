@@ -6,6 +6,7 @@ import { currentTime } from '../../../stores/motionSignals';
 import { useAndroidPlaybackEngineStore } from '../../../stores/useAndroidPlaybackEngineStore';
 import {
     isIgnoringBatteryOptimizations,
+    isNativeEnginePlaying,
     onNativeEngineEnded,
     onNativeEngineError,
     onNativeEngineProgress,
@@ -16,6 +17,7 @@ import {
     startNativeEnginePlayback,
     stopNativeEnginePlayback,
 } from '../../../services/nativeEngineBridge';
+import { subscribeAppLifecycle } from '../../../services/androidAppLifecycle';
 
 // src/components/app/playback/useNativePlaybackController.ts
 // 原生播放器（MediaPlayer）方案的接线。声音由原生 MediaPlayer 硬解码直出，绕开 WebView 的
@@ -111,6 +113,41 @@ export const useNativePlaybackController = (
         element.addEventListener('seeked', onSeeked);
         return () => element.removeEventListener('seeked', onSeeked);
     }, [audioRef]);
+
+    // Mute watchdog: the app's volume pipeline (syncOutputGain) rewrites audioRef.muted/volume on
+    // every volume or mute change, which would silently unmute the keep-alive element and let both
+    // the WebView and the native player output at once. While native playback is active, keep the
+    // element pinned to muted + volume 0.
+    useEffect(() => {
+        if (!IS_ANDROID_WEBVIEW) return;
+        const guard = window.setInterval(() => {
+            if (!nativeActiveRef.current) return;
+            const element = audioRef.current;
+            if (!element) return;
+            if (!element.muted) element.muted = true;
+            if (element.volume !== 0) element.volume = 0;
+        }, 500);
+        return () => window.clearInterval(guard);
+    }, [audioRef]);
+
+    // Background self-heal: if the OS killed the playback service while the app was in the
+    // background (no battery exemption yet, or aggressive OEM policy), restart the native player
+    // from the last reported position when the user comes back to the app.
+    useEffect(() => {
+        if (!IS_ANDROID_WEBVIEW) return;
+        return subscribeAppLifecycle((state) => {
+            if (state !== 'foreground') return;
+            if (!nativeActiveRef.current || !nativeUrlRef.current) return;
+            const url = nativeUrlRef.current;
+            window.setTimeout(() => {
+                void isNativeEnginePlaying().then((playing) => {
+                    if (!playing) {
+                        void startNativeEnginePlayback(url, Math.round(currentTime.get() * 1000));
+                    }
+                }).catch(() => undefined);
+            }, 800);
+        });
+    }, []);
 
     // Native progress drives the UI clock as a fallback: in background/lock-screen the WebView
     // element's timeupdate can freeze (muted audio is throttled by Chromium), while the native
