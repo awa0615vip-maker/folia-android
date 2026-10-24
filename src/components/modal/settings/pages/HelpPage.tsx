@@ -1,27 +1,29 @@
 import React from 'react';
-import { ChevronRight, CircleHelp, ExternalLink, Lightbulb, MessageCircle, Sparkles, Users, type LucideIcon } from 'lucide-react';
+import { ChevronRight, CircleHelp, ExternalLink, Lightbulb, MessageCircle, Sparkles, type LucideIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { openPonderNavigation } from '../../../../services/ponder/pagePonderTarget';
 import { BUILD_KIND_TAGS, getBuildKind } from '../../../../utils/buildProvenance';
 import { PRIMARY_MODIFIER_LABEL } from '../../../../utils/platform';
 import { openDiscordInvite } from '../../../shared/discordCommunity';
-import { QQ_COMMUNITY_GROUP_NUMBER } from '../../../shared/qqCommunity';
 import { HELP_TAB_PLAYER_CONTROLS, HELP_TAB_PRIMARY_SHORTCUTS } from '../../userGuideContent';
-import { Button, CopyButton, CopyValue, Group, Keys, Row, type SettingsGroupDef } from '../kit';
+import { Button, CopyButton, Group, Keys, Row, type SettingsGroupDef } from '../kit';
 import { openOutsideLink } from '../../../../utils/system/outsideLink';
 import { FoundUpdateRow } from './FoundUpdateRow';
 import { iconLabel } from './iconLabel';
+import { AndroidHelpUpdateEntry } from './AndroidSettingsSections';
 
 // src/components/modal/settings/pages/HelpPage.tsx
 // The 帮助 page, reached from the foot of the side list: two entry cards (the release notes, the
 // Ponder tutorials), the keyboard shortcuts and the player's keys side by side, where to get help
-// (the help dialog, the Discord server, the QQ group), and the version with a found update and the
+// (the help dialog, the Discord server), and the version with a found update and the
 // project link. A build that is not this repository's own says so under its version. It is not a settings category, so it
 // is not in pages/index.ts and the search does not list it; the settings window mounts it itself
 // and hands it the two dialogs it opens.
 
-const REPOSITORY_URL = 'https://github.com/chthollyphile/folia-major';
-const REPOSITORY_NAME = 'chthollyphile/folia-major';
+const REPOSITORY_URL = 'https://github.com/awa0615vip-maker/folia-android';
+const REPOSITORY_NAME = 'awa0615vip-maker/folia-android';
+// 作者抖音主页（帮助页「关注我的抖音」入口）。
+const DOUYIN_PROFILE_URL = 'https://v.douyin.com/DASqo_2Ngmg/';
 const BUILD_KIND = getBuildKind();
 const VERSION_INFO = (__DOCKER_STACK_VERSION__
     ? `${__APP_VERSION_LABEL__} v${__APP_VERSION__} · Stack ${__DOCKER_STACK_VERSION__} · ${__COMMIT_HASH__}`
@@ -145,10 +147,8 @@ const HelpPage: React.FC<HelpPageProps> = ({ onOpenReleaseNotes, onOpenAiHelp, o
             <Group def={SUPPORT} bare>
                 <Row label={iconLabel(CircleHelp, t('aiHelp.openButton'))} onClick={onOpenAiHelp} />
                 <Row label={iconLabel(MessageCircle, t('help.joinDiscord'))} onClick={openDiscordInvite} />
-                {/* A QQ group has no link that opens it: the row gives its number to copy. */}
-                <Row label={iconLabel(Users, t('help.communityQq'))}>
-                    <CopyValue value={QQ_COMMUNITY_GROUP_NUMBER} />
-                </Row>
+                {/* 作者抖音主页：点击在外部浏览器/抖音 App 打开，关注作者。 */}
+                <Row label={iconLabel(Sparkles, t('help.followDouyin'))} onClick={() => openOutsideLink(DOUYIN_PROFILE_URL)} />
             </Group>
 
             <Group def={ABOUT} bare>
@@ -163,6 +163,8 @@ const HelpPage: React.FC<HelpPageProps> = ({ onOpenReleaseNotes, onOpenAiHelp, o
                     <Row sub notice={t(BUILD_KIND === 'unofficial' ? 'options.unofficialBuildNotice' : 'options.selfHostedBuildNotice')} />
                 )}
                 <FoundUpdateRow sub />
+                {/* 安卓专属：当前版本 + 检查更新（GitHub Releases 内置下载器，仅安卓 WebView 渲染）。 */}
+                <AndroidHelpUpdateEntry />
                 <Row
                     label={(
                         // The settings window counts the clicks and shows the cat at the seventh.

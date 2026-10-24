@@ -128,3 +128,16 @@ export const AndroidUpdateSettingsSection: React.FC = () => {
         </div>
     );
 };
+
+/** 帮助页「关于与版本」区：安卓专属的版本 + 检查更新入口（仅安卓 WebView 渲染）。 */
+export const AndroidHelpUpdateEntry: React.FC = () => {
+    const { isDaylight, settingsCardClass, dividerClass, utilityGhostButtonClass } = useAndroidCardClasses();
+    if (!IS_ANDROID_WEBVIEW) return null;
+    return (
+        <AndroidUpdateSection
+            settingsCardClass={settingsCardClass}
+            dividerClass={dividerClass}
+            utilityGhostButtonClass={utilityGhostButtonClass}
+        />
+    );
+};
