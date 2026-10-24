@@ -1403,6 +1403,33 @@ export default function App() {
         pauseDuringTransition: handlePauseDuringTransition,
         isTransitionAudible: automix.isTransitionAudible,
     });
+
+    // 通知栏媒体按钮（播放/暂停/上一首/下一首）→ 原生 mediaAction → 驱动真实播放器。
+    // 此前事件到 JS 后无人消费，通知栏的暂停/播放点了没反应；现在接到与界面按钮同一套控制函数。
+    useEffect(() => {
+        const onMediaAction = (event: Event) => {
+            const action = (event as CustomEvent<{ action?: string }>).detail?.action;
+            if (!action) return;
+            switch (action) {
+                case 'play':
+                    void resumePlayback();
+                    break;
+                case 'pause':
+                    pausePlayback();
+                    break;
+                case 'next':
+                    void handleNextTrack();
+                    break;
+                case 'previous':
+                    void handlePrevTrack();
+                    break;
+                default:
+                    break;
+            }
+        };
+        window.addEventListener('folia-native-media-action', onMediaAction);
+        return () => window.removeEventListener('folia-native-media-action', onMediaAction);
+    }, [resumePlayback, pausePlayback, handleNextTrack, handlePrevTrack]);
     useNavidromeScrobbleReporter({
         audioRef,
         currentSong,
