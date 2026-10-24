@@ -99,6 +99,7 @@ import { usePlayerChromeAutoHide } from './hooks/usePlayerChromeAutoHide';
 import { useMacWallpaperHitRegions } from './hooks/useMacWallpaperHitRegions';
 import { useIdleCursorHide } from './hooks/useIdleCursorHide';
 import { usePlaybackAudioBridge } from './components/app/playback/bridges/usePlaybackAudioBridge';
+import { useNativePlaybackController } from './components/app/playback/useNativePlaybackController';
 import { useTranscodeFallback } from './hooks/useTranscodeFallback';
 import { useAutomixDecks, type AutomixDeckId } from './services/automix/useAutomixDecks';
 import { usePlaybackInteractionBridge } from './components/app/playback/bridges/usePlaybackInteractionBridge';
@@ -418,6 +419,8 @@ export default function App() {
         loopMode,
         volume,
         isMuted,
+        audioEngineMode,
+        audioEngineEpoch,
         handleToggleLoopMode,
     } = useAudioSettingsStore(useShallow(selectAudioSettingsSnapshot));
     const {
@@ -1331,6 +1334,10 @@ export default function App() {
         getCoverUrl,
         isTransitionAudible: automix.isTransitionAudible,
     });
+
+    // 原生播放器方案（设置里可选）：声音改由原生 MediaPlayer 输出，WebView 端静音保活，
+    // 队列/歌词/进度/自动切歌照常由 audio 元素事件流驱动；本地歌自动回退原版播放。
+    useNativePlaybackController(audioRef);
 
     const handleTranscodeFallback = useTranscodeFallback({
         audioSrc,
@@ -2401,6 +2408,21 @@ export default function App() {
     });
     // 首页墙透出来的 visualizer 加模糊（bravais「墙后的画面」，stage 报告；只在首页墙露着时）。
     const libraryBackdropBlur = useLibraryPlayerOcclusionStore(state => selectLibraryPlayerBackdrop(state).blur);
+
+    // 播放引擎切换（设置 → 播放 → 播放引擎）：audioEngineEpoch 变化会重建 <audio> 元素
+    // （MediaElementSource 接管过的元素无法改回直出），新元素就绪后把当前歌交给新引擎从头重播。
+    const previousEngineEpochRef = useRef(audioEngineEpoch);
+    useEffect(() => {
+        if (audioEngineEpoch === previousEngineEpochRef.current) {
+            return;
+        }
+        previousEngineEpochRef.current = audioEngineEpoch;
+        const song = usePlaybackStore.getState().currentSong;
+        if (song) {
+            // 让新元素先挂载（本 effect 已在提交后运行），再重播；失败静默，用户可手动再播。
+            void Promise.resolve().then(() => playSong(song)).catch(() => undefined);
+        }
+    }, [audioEngineEpoch, playSong]);
     const blursVisualizerBackdrop = resolveVisualizerBackdropBlur({ shouldRevealHomeSurface, backdropBlur: libraryBackdropBlur });
 
     // The two automix decks are identical and interchangeable. Every handler below ignores the
@@ -2408,7 +2430,7 @@ export default function App() {
     // the progress bar, the duration, the queue, or the player state.
     const renderAudioDeck = (deck: AutomixDeckId, register: (element: HTMLAudioElement | null) => void) => (
         <audio
-            key={deck}
+            key={`${deck}-${audioEngineEpoch}`}
             ref={register}
             src={automix.deckSrc(deck)}
             preload="auto"

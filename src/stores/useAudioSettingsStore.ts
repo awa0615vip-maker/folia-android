@@ -193,6 +193,14 @@ const readStoredVolume = () => {
     return Number.isFinite(parsed) ? parsed : 1;
 };
 
+const readStoredAudioEngineMode = (): 'webaudio' | 'direct' => {
+    if (typeof window === 'undefined') {
+        return 'webaudio';
+    }
+    const saved = localStorage.getItem('player_audio_engine_mode');
+    return saved === 'direct' ? 'direct' : 'webaudio';
+};
+
 export type AudioSettingsState = {
     audioQuality: AudioQuality;
     enableMediaCache: boolean;
@@ -225,6 +233,18 @@ export type AudioSettingsState = {
     volume: number;
     isMuted: boolean;
     loopMode: 'off' | 'all' | 'one';
+    /**
+     * Which audio engine plays the stream. 'webaudio' is the upstream pipeline (equalizer,
+     * effects, visualizer, automix blends) via a MediaElementSource graph; 'direct' plays the
+     * <audio> element straight to the hardware with no WebAudio graph at all - the cleanest path
+     * on Android WebView, where the graph itself can stutter/crackle. The visualizer, equalizer
+     * and effect chain need the WebAudio engine.
+     */
+    audioEngineMode: 'webaudio' | 'direct';
+    /** Bumped on every engine switch so <audio> elements are rebuilt (a MediaElementSource
+     * takeover cannot be undone; switching engines must start with fresh elements). */
+    audioEngineEpoch: number;
+    setAudioEngineMode: (mode: 'webaudio' | 'direct') => void;
     setAudioQuality: (quality: AudioQuality) => void;
     handleToggleMediaCache: (enable: boolean) => void;
     handleSetMediaCacheLimitGb: (gigabytes: number) => void;
@@ -331,6 +351,8 @@ export const useAudioSettingsStore = create<AudioSettingsState>((set, get) => ({
     volume: readStoredVolume(),
     isMuted: getStoredBoolean('player_is_muted', false),
     loopMode: readStoredLoopMode(),
+    audioEngineMode: readStoredAudioEngineMode(),
+    audioEngineEpoch: 0,
     setAudioQuality: (quality) => {
         if (typeof window !== 'undefined') {
             localStorage.setItem('default_audio_quality', quality);
@@ -465,6 +487,21 @@ export const useAudioSettingsStore = create<AudioSettingsState>((set, get) => ({
         }
         set({ volume: val });
     },
+    // Switching the engine bumps the epoch so <audio> elements are rebuilt: a deck that was ever
+    // taken over by MediaElementSource cannot be returned to direct output, so the change must
+    // start from fresh elements. The playback layer replays the current song on the new epoch.
+    setAudioEngineMode: (mode) => {
+        if (mode === get().audioEngineMode) {
+            return;
+        }
+        if (typeof window !== 'undefined') {
+            localStorage.setItem('player_audio_engine_mode', mode);
+        }
+        set({
+            audioEngineMode: mode,
+            audioEngineEpoch: get().audioEngineEpoch + 1,
+        });
+    },
     // The toggles below delegate to these setters, so persistence and the toast live in one place
     // (Folium's playback.setMuted / setLoopMode call the setters directly).
     handleSetMuted: (muted) => {
@@ -523,6 +560,8 @@ export const selectAudioSettingsSnapshot = (state: AudioSettingsState) => ({
     volume: state.volume,
     isMuted: state.isMuted,
     loopMode: state.loopMode,
+    audioEngineMode: state.audioEngineMode,
+    audioEngineEpoch: state.audioEngineEpoch,
     setAudioQuality: state.setAudioQuality,
     handleToggleMediaCache: state.handleToggleMediaCache,
     handleSetMediaCacheLimitGb: state.handleSetMediaCacheLimitGb,

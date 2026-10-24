@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 后台无限制（电池优化豁免）：音乐后台播放需要用户授权，授权入口在应用内。 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- 明确声明支持大屏与任意密度，减少厂商兼容模式把 App 塞进固定比例窗口的概率。 -->
     <supports-screens
         android:anyDensity="true"

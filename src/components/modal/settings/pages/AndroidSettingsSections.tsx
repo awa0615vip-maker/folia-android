@@ -12,10 +12,12 @@ import AndroidImmersiveSetting from '../AndroidImmersiveSetting';
 import AndroidKeepScreenOnSetting from '../AndroidKeepScreenOnSetting';
 import AndroidPhoneFitSetting from '../AndroidPhoneFitSetting';
 import AndroidUpdateSection from '../AndroidUpdateSection';
+import AndroidPlaybackEngineSetting from '../AndroidPlaybackEngineSetting';
+import AndroidBatteryOptimizationSetting from '../AndroidBatteryOptimizationSetting';
 
 // src/components/modal/settings/pages/AndroidSettingsSections.tsx
 // 安卓专属设置条目（旧版优化迁移）：通用页底部的设备适配开关（沉浸/常亮/手机适配/自适应），
-// 以及性能页底部的应用内更新（检查 GitHub Releases → 原生 DownloadManager 下载 → 安装）。
+// 以及播放方案/后台无限制、性能页底部的应用内更新（检查 GitHub Releases → 原生下载 → 安装）。
 // 仅安卓 WebView 渲染，桌面保持上游原样。
 
 const useAndroidCardClasses = () => {
@@ -80,7 +82,7 @@ const CoverCacheUsageSection: React.FC = () => {
     );
 };
 
-/** 通用页底部：自适应屏幕分辨率 / 全沉浸 / 屏幕常亮 / 手机适配 / 封面缓存。 */
+/** 通用页底部：自适应屏幕分辨率 / 全沉浸 / 屏幕常亮 / 手机适配 / 封面缓存 / 播放方案 / 后台无限制。 */
 export const AndroidGeneralSettingsSection: React.FC = () => {
     const { isDaylight, settingsCardClass, dividerClass, utilityGhostButtonClass } = useAndroidCardClasses();
     if (!IS_ANDROID_WEBVIEW) return null;
@@ -106,6 +108,16 @@ export const AndroidGeneralSettingsSection: React.FC = () => {
                 isDaylight={isDaylight}
                 settingsCardClass={settingsCardClass}
                 theme={theme}
+            />
+            <AndroidPlaybackEngineSetting
+                isDaylight={isDaylight}
+                settingsCardClass={settingsCardClass}
+                theme={theme}
+            />
+            <AndroidBatteryOptimizationSetting
+                isDaylight={isDaylight}
+                settingsCardClass={settingsCardClass}
+                utilityGhostButtonClass={utilityGhostButtonClass}
             />
             <CoverCacheUsageSection />
             <div className={dividerClass} />

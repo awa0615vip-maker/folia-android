@@ -13,6 +13,7 @@ import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.media.MediaMetadata;
+import android.media.MediaPlayer;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
 import android.os.Build;
@@ -56,6 +57,130 @@ public class FoliaPlaybackService extends Service {
     private AudioFocusRequest audioFocusRequest;
     private boolean audioFocusHeld = false;
     private boolean transientlyLostFocus = false;
+
+    // --- Native playback engine (MediaPlayer, hard-decoded, bypasses WebView audio) ---
+    // The WebView's <audio> + WebAudio path stutters and crackles on Android WebView. This
+    // second playback scheme plays through a real Android MediaPlayer inside this service:
+    // position/duration and completion events stream back to the JS layer over the bridge, and
+    // the UI (progress, lyrics, controls) is driven by those values exactly like before.
+    private MediaPlayer mediaPlayer;
+    private boolean nativePlaying = false;
+    private String nativeSourceUrl = "";
+    private final Handler progressHandler = new Handler(Looper.getMainLooper());
+    private final Runnable progressPoller = new Runnable() {
+        @Override
+        public void run() {
+            if (mediaPlayer == null || !nativePlaying) return;
+            try {
+                long position = Math.max(0, mediaPlayer.getCurrentPosition());
+                long duration = mediaPlayer.getDuration();
+                if (duration > 0) {
+                    FoliaNativePlugin.emitNativeProgress(position, duration);
+                }
+            } catch (Exception ignored) {
+                // Player may be mid-teardown; the next poll simply does not fire.
+            }
+            progressHandler.postDelayed(this, 500);
+        }
+    };
+
+    /** Starts (or replaces) native playback of a remote URL. Called from the JS bridge. */
+    public void playNative(String url, long positionMs) {
+        stopNativePlayer();
+        nativeSourceUrl = url;
+        MediaPlayer player = new MediaPlayer();
+        try {
+            player.setAudioAttributes(new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build());
+            player.setDataSource(url);
+            player.setOnPreparedListener(p -> {
+                if (positionMs > 0) p.seekTo((int) positionMs);
+                p.start();
+                nativePlaying = true;
+                requestAudioFocus();
+                updatePlaybackLocks(true);
+                progressHandler.removeCallbacks(progressPoller);
+                progressHandler.post(progressPoller);
+                FoliaNativePlugin.emitNativeStarted(p.getDuration());
+            });
+            player.setOnCompletionListener(p -> {
+                nativePlaying = false;
+                progressHandler.removeCallbacks(progressPoller);
+                FoliaNativePlugin.emitNativeEnded();
+            });
+            player.setOnErrorListener((p, what, extra) -> {
+                nativePlaying = false;
+                progressHandler.removeCallbacks(progressPoller);
+                updatePlaybackLocks(false);
+                FoliaNativePlugin.emitNativeError("media-error:" + what + ":" + extra);
+                return true;
+            });
+            mediaPlayer = player;
+            player.prepareAsync();
+        } catch (Exception error) {
+            nativePlaying = false;
+            FoliaNativePlugin.emitNativeError(error.getMessage() == null ? "prepare-failed" : error.getMessage());
+            releaseNativePlayer();
+        }
+    }
+
+    public void pauseNative() {
+        nativePlaying = false;
+        progressHandler.removeCallbacks(progressPoller);
+        if (mediaPlayer != null && mediaPlayer.isPlaying()) {
+            mediaPlayer.pause();
+        }
+        updatePlaybackLocks(false);
+        abandonAudioFocus();
+    }
+
+    public void resumeNative() {
+        if (mediaPlayer == null) return;
+        try {
+            mediaPlayer.start();
+            nativePlaying = true;
+            requestAudioFocus();
+            updatePlaybackLocks(true);
+            progressHandler.post(progressPoller);
+        } catch (Exception ignored) {
+            FoliaNativePlugin.emitNativeError("resume-failed");
+        }
+    }
+
+    public void seekNative(long positionMs) {
+        if (mediaPlayer == null) return;
+        try {
+            mediaPlayer.seekTo((int) Math.max(0, positionMs));
+        } catch (Exception ignored) { }
+    }
+
+    public boolean isNativePlaying() {
+        return nativePlaying;
+    }
+
+    public void stopNativePlayer() {
+        nativePlaying = false;
+        progressHandler.removeCallbacks(progressPoller);
+        releaseNativePlayer();
+        updatePlaybackLocks(false);
+        abandonAudioFocus();
+    }
+
+    private void releaseNativePlayer() {
+        if (mediaPlayer != null) {
+            try {
+                mediaPlayer.stop();
+            } catch (Exception ignored) { }
+            mediaPlayer.release();
+            mediaPlayer = null;
+        }
+    }
+
+    private void requestAudioFocus() {
+        ensureAudioFocus();
+    }
 
     private final AudioManager.OnAudioFocusChangeListener audioFocusListener = focusChange -> {
         switch (focusChange) {
@@ -116,6 +241,30 @@ public class FoliaPlaybackService extends Service {
         if (intent == null || "clear".equals(intent.getAction())) {
             stopSelf();
             return START_NOT_STICKY;
+        }
+
+        String action = intent.getAction();
+        if (action != null) {
+            switch (action) {
+                case "native-play":
+                    playNative(intent.getStringExtra("url") == null ? "" : intent.getStringExtra("url"),
+                        intent.getLongExtra("position", 0));
+                    break;
+                case "native-pause":
+                    pauseNative();
+                    break;
+                case "native-resume":
+                    resumeNative();
+                    break;
+                case "native-seek":
+                    seekNative(intent.getLongExtra("position", 0));
+                    break;
+                case "native-stop":
+                    stopNativePlayer();
+                    break;
+                default:
+                    break;
+            }
         }
 
         String title = intent.getStringExtra("title");
@@ -407,6 +556,8 @@ public class FoliaPlaybackService extends Service {
     public void onDestroy() {
         updatePlaybackLocks(false);
         abandonAudioFocus();
+        progressHandler.removeCallbacks(progressPoller);
+        releaseNativePlayer();
         artworkExecutor.shutdownNow();
         if (mediaSession != null) {
             mediaSession.setActive(false);

@@ -18,6 +18,10 @@ const resolveFilterFrequency = (context: AudioContext, frequency: number) => (
 );
 
 // Creates one stable ten-filter chain for the lifetime of the MediaElementAudioSourceNode.
+// Idempotent: each call tears the previous wiring down (including a bypass straight wire) and
+// rebuilds per the current settings. While the equalizer is off nothing is allocated at all -
+// input feeds output directly. Upstream kept ten BiquadFilters connected even when bypassed,
+// which on Android WebView was a permanent load on the audio thread (stutter/crackle).
 export const connectAudioEqualizerGraph = ({
     context,
     input,
@@ -25,6 +29,15 @@ export const connectAudioEqualizerGraph = ({
     nodesRef,
     settings,
 }: ConnectAudioEqualizerGraphParams) => {
+    try { input.disconnect(); } catch { /* context may be gone */ }
+    nodesRef.current.forEach(filter => { try { filter.disconnect(); } catch { /* context may be gone */ } });
+    nodesRef.current = [];
+
+    if (!settings.enabled) {
+        input.connect(output);
+        return;
+    }
+
     const nodes = AUDIO_EQUALIZER_BANDS.map((band, index) => {
         const filter = context.createBiquadFilter();
         filter.type = audioEqualizerBandShape(index);
@@ -57,6 +70,8 @@ export const applyAudioEqualizerSettings = (
     settings: AudioEqualizerSettings,
     timeConstant = EQUALIZER_TIME_CONSTANT_SECONDS,
 ) => {
+    // While the equalizer is off (or between a toggle and the rebuild) there are no nodes to tune.
+    if (nodes.length === 0) return;
     nodes.forEach((filter, index) => {
         const nextGain = settings.enabled ? (settings.gains[index] ?? 0) : 0;
         filter.gain.cancelScheduledValues(context.currentTime);

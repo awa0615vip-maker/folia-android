@@ -78,6 +78,10 @@ export function usePlaybackAudioBridge({
     const replayGainLogSignatureRef = useRef<string | null>(null);
     const equalizerNodesRef = useRef<BiquadFilterNode[]>([]);
     const effectChainRef = useRef<AudioEffectChain | null>(null);
+    /** The whole graph, kept so the equalizer can be re-wired when it is toggled while playing. */
+    const playbackGraphRef = useRef<import('../../../../services/playbackGraph').PlaybackGraph | null>(null);
+    /** Tracks the equalizer's enabled flag across runs so the bypass wire is only rebuilt on the off→on edge. */
+    const lastEqualizerEnabledRef = useRef(true);
     const audioEqualizerSettings = useAudioSettingsStore(state => state.audioEqualizerSettings);
     // What is heard: the listener's own settings with a mod's curve over the gains (Folium 1.7). Worked out
     // here rather than in a selector, which would hand useSyncExternalStore a new object on every read.
@@ -186,6 +190,24 @@ export function usePlaybackAudioBridge({
         // The context is the sentinel, not the source node: a deck that failed to connect must
         // not let this run twice, because createMediaElementSource throws on a second call.
         if (!audioRef.current || audioContextRef.current) return;
+
+        // Direct engine: play the <audio> element straight to the hardware, no WebAudio graph.
+        // On Android WebView the MediaElementSource graph itself is the source of stutter,
+        // crackle and robotic artifacts (audio is resampled through the graph), so this mode
+        // keeps the pipeline completely out of the way. Volume falls back to the element
+        // (syncOutputGain), fade falls back to plain element pause/play (playbackFade), and the
+        // equalizer/effects/visualizer simply have no graph to read (they need WebAudio engine).
+        if (useAudioSettingsStore.getState().audioEngineMode === 'direct') {
+            console.log('[AudioContext] Direct engine: <audio> plays straight to the hardware, no WebAudio graph');
+            analyserRef.current = null;
+            gainNodeRef.current = null;
+            registerPlaybackFadeGraph(null);
+            effectChainRef.current?.dispose();
+            effectChainRef.current = null;
+            playbackGraphRef.current = null;
+            return;
+        }
+
         try {
             const AudioContextClass = window.AudioContext || (window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
             const ctx = new AudioContextClass();
@@ -196,13 +218,15 @@ export function usePlaybackAudioBridge({
             analyser.smoothingTimeConstant = 0.6;
             analyserRef.current = analyser;
 
-            const { gainNode, fadeNode, effectChain, decksConnected } = buildPlaybackGraph({
+            const graph = buildPlaybackGraph({
                 context: ctx,
                 analyser,
                 connectDecks,
                 equalizerNodesRef,
                 settings: heardEqualizerSettings,
             });
+            playbackGraphRef.current = graph;
+            const { gainNode, fadeNode, effectChain, decksConnected } = graph;
             gainNodeRef.current = gainNode;
             // Hands the transport its own fade node; until this runs (or if setup fails) pause and
             // resume see no graph and fall back to plain element pause/play.
@@ -268,7 +292,21 @@ export function usePlaybackAudioBridge({
     useEffect(() => {
         heardEqualizerSettingsRef.current = heardEqualizerSettings;
         const context = audioContextRef.current;
-        if (!context || equalizerNodesRef.current.length === 0) {
+        if (!context) {
+            return;
+        }
+        // The equalizer was off (bypassed, no filters allocated) and was just switched on: rebuild
+        // the segment idempotently before tuning it. Only on the off→on edge - while it stays off
+        // the bypass wire must not be torn down and re-made on every settings change (a reconnect
+        // can itself pop).
+        const enabledNow = heardEqualizerSettings.enabled;
+        if (equalizerNodesRef.current.length === 0 && enabledNow && !lastEqualizerEnabledRef.current) {
+            playbackGraphRef.current?.rebuildEqualizer();
+        }
+        lastEqualizerEnabledRef.current = enabledNow;
+        if (equalizerNodesRef.current.length === 0) {
+            // Bypassed: nothing to tune; the effect chain follows its own enabled flag.
+            effectChainRef.current?.apply(heardEqualizerSettings.effects, heardEqualizerSettings.enabled);
             return;
         }
         const plan = planAudioEqualizerApply({
@@ -291,12 +329,34 @@ export function usePlaybackAudioBridge({
             apply(heardEqualizerSettingsRef.current);
         }, DEFERRED_EQUALIZER_POLL_MS);
         return () => clearInterval(timer);
-    }, [audioContextRef, heardEqualizerSettings, equalizerOrigin]);
+    }, [audioContextRef, heardEqualizerSettings, equalizerOrigin, playbackGraphRef]);
 
     useEffect(() => () => {
         effectChainRef.current?.dispose();
         effectChainRef.current = null;
     }, []);
+
+    // Engine switch webaudio → direct: a deck that was ever taken over by MediaElementSource
+    // cannot be routed back to direct output, so the <audio> elements are rebuilt (App keys them
+    // by audioEngineEpoch) and this tears the old graph down here, where all the refs live. The
+    // direct engine then plays the fresh elements straight to the hardware. Switching direct →
+    // webaudio needs no cleanup: the next play builds a fresh graph over the new elements.
+    useEffect(() => {
+        if (useAudioSettingsStore.getState().audioEngineMode !== 'direct') {
+            return;
+        }
+        const ctx = audioContextRef.current;
+        if (ctx) {
+            try { void ctx.close(); } catch { /* ignore */ }
+            audioContextRef.current = null;
+        }
+        analyserRef.current = null;
+        gainNodeRef.current = null;
+        registerPlaybackFadeGraph(null);
+        effectChainRef.current?.dispose();
+        effectChainRef.current = null;
+        playbackGraphRef.current = null;
+    }, [audioContextRef, analyserRef, effectChainRef, gainNodeRef, playbackGraphRef]);
 
     useEffect(() => {
         const audioElement = audioRef.current;

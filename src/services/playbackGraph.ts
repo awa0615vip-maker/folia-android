@@ -32,6 +32,13 @@ export type PlaybackGraph = {
     effectChain: AudioEffectChain;
     /** False when a deck was missing, so automix will stay idle. Audio still flows. */
     decksConnected: boolean;
+    /**
+     * Re-wires the equalizer segment against the current settings. Idempotent: while the
+     * equalizer is off it routes input straight to output with no filters allocated, and when
+     * toggled on it rebuilds the ten-band chain. Owned here because only this module holds the
+     * mix point and the equalizer seam.
+     */
+    rebuildEqualizer: () => void;
 };
 
 export const buildPlaybackGraph = ({
@@ -56,6 +63,16 @@ export const buildPlaybackGraph = ({
         nodesRef: equalizerNodesRef,
         settings,
     });
+    // Idempotent re-wire used when the equalizer is toggled on/off while playing.
+    const rebuildEqualizer = () => {
+        connectAudioEqualizerGraph({
+            context,
+            input: mixNode,
+            output: equalizerOutput,
+            nodesRef: equalizerNodesRef,
+            settings,
+        });
+    };
 
     /**
      * Volume, and it sits AFTER the effects rather than at the mix point where it started.
@@ -105,5 +122,5 @@ export const buildPlaybackGraph = ({
         + ` noise ${settings.effects.noise}, crush ${settings.effects.crush}, punch ${settings.effects.punch})`,
     );
 
-    return { gainNode, fadeNode, effectChain, decksConnected };
+    return { gainNode, fadeNode, effectChain, decksConnected, rebuildEqualizer };
 };
