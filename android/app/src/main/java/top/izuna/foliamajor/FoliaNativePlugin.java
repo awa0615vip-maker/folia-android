@@ -769,6 +769,49 @@ public class FoliaNativePlugin extends Plugin {
         call.resolve(result);
     }
 
+    // ===== 通用平台「内置网页登录」（酷狗/QQ）：App 内 WebView 打开官方登录页，回传整段 Cookie =====
+
+    @PluginMethod
+    public void openProviderWebLogin(PluginCall call) {
+        Activity activity = getActivity();
+        if (activity == null) {
+            call.reject("No activity");
+            return;
+        }
+        String provider = call.getString("provider", "kugou");
+        String url = call.getString("url", "");
+        Intent intent = new Intent(activity, ProviderLoginActivity.class);
+        if (provider != null && !provider.isEmpty()) {
+            intent.putExtra(ProviderLoginActivity.EXTRA_PROVIDER, provider);
+        }
+        if (url != null && !url.isEmpty()) {
+            intent.putExtra(ProviderLoginActivity.EXTRA_URL, url);
+        }
+        startActivityForResult(call, intent, "handleProviderWebLogin");
+    }
+
+    @ActivityCallback
+    private void handleProviderWebLogin(PluginCall call, ActivityResult activityResult) {
+        if (call == null) return;
+        int resultCode = activityResult == null ? Activity.RESULT_CANCELED : activityResult.getResultCode();
+        Intent data = activityResult == null ? null : activityResult.getData();
+        if (resultCode != Activity.RESULT_OK || data == null) {
+            JSObject cancelled = new JSObject();
+            cancelled.put("cancelled", true);
+            call.resolve(cancelled);
+            return;
+        }
+        String cookie = data.getStringExtra(ProviderLoginActivity.EXTRA_COOKIE);
+        String finalUrl = data.getStringExtra(ProviderLoginActivity.EXTRA_FINAL_URL);
+        String cookieKeys = data.getStringExtra(ProviderLoginActivity.EXTRA_COOKIE_KEYS);
+        JSObject result = new JSObject();
+        result.put("cancelled", false);
+        result.put("cookie", cookie == null ? "" : cookie);
+        result.put("url", finalUrl == null ? "" : finalUrl);
+        result.put("cookieKeys", cookieKeys == null ? "" : cookieKeys);
+        call.resolve(result);
+    }
+
     /** 供 WebView 重建导入音频的流地址（端口每次启动都可能不同）。 */
     @PluginMethod
     public void localAudioServerPort(PluginCall call) {

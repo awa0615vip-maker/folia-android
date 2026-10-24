@@ -62,6 +62,13 @@ type NativePlugin = {
     url?: string;
     cookieKeys?: string;
   }>;
+  // 通用平台「内置网页登录」（酷狗/QQ）：打开官方网页登录页，回传整段 Cookie。
+  openProviderWebLogin?: (options: Record<string, unknown>) => Promise<{
+    cancelled?: boolean;
+    cookie?: string;
+    url?: string;
+    cookieKeys?: string;
+  }>;
 };
 
 type ApiHandler = (input: Record<string, unknown>) => Promise<unknown>;
@@ -121,6 +128,27 @@ export const openQishuiWebLogin = async (url?: string): Promise<{
   const plugin = getPlugin();
   if (!plugin?.openQishuiWebLogin) return { cancelled: true, cookie: '', url: '', cookieKeys: '' };
   const result = await plugin.openQishuiWebLogin(url ? { url } : {});
+  return {
+    cancelled: Boolean(result?.cancelled),
+    cookie: result?.cookie ?? '',
+    url: result?.url ?? '',
+    cookieKeys: result?.cookieKeys ?? '',
+  };
+};
+
+/**
+ * 通用平台「内置网页登录」（酷狗/QQ）：仅在 Android 原生壳里可用。
+ * 打开全屏 WebView 加载官方登录页，登录成功后原生侧读出会话 Cookie 返回。
+ */
+export const openProviderWebLogin = async (provider: 'kugou' | 'qq', url?: string): Promise<{
+    cancelled: boolean;
+    cookie: string;
+    url: string;
+    cookieKeys: string;
+}> => {
+  const plugin = getPlugin();
+  if (!plugin?.openProviderWebLogin) return { cancelled: true, cookie: '', url: '', cookieKeys: '' };
+  const result = await plugin.openProviderWebLogin({ provider, ...(url ? { url } : {}) });
   return {
     cancelled: Boolean(result?.cancelled),
     cookie: result?.cookie ?? '',

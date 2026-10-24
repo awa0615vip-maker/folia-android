@@ -11,6 +11,8 @@
 // （purl 为空，完整播放需登录，登录为后续版本）。
 
 import { OnlineProviderError } from '../../../types/onlineMusic';
+import { readProviderSessionValue, removeProviderSessionValue, writeProviderSessionValue } from '../providerStorage';
+import { openProviderWebLogin } from '../../nativeAndroidBridge';
 
 const QQ_UA = 'Mozilla/5.0 (Linux; Android 14; Xiaomi 14 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36';
 
@@ -23,21 +25,40 @@ export const getQqGuid = (): string => {
     return qqGuid;
 };
 
-// musicu.fcg 统一请求：comm + 命名 req_1..req_N
+// 登录态：整段 Cookie 与 uin 存在 'qq' 会话存储（与上游后端登录共用同一存储键，登录状态 UI 直接可见）。
+const readQqSessionCookie = (): string => readProviderSessionValue('qq', 'cookie') || '';
+const readQqSessionUin = (): string => {
+    const stored = readProviderSessionValue('qq', 'uin');
+    if (stored) return stored;
+    // 从 Cookie 里兜底解析（y.qq.com 登录后的 uin=QQ号）。
+    const cookie = readQqSessionCookie();
+    for (const part of cookie.split(';')) {
+        const p = part.trim();
+        const eq = p.indexOf('=');
+        if (eq > 0 && p.substring(0, eq).trim() === 'uin') return p.substring(eq + 1).trim();
+    }
+    return '';
+};
+
+// musicu.fcg 统一请求：comm + 命名 req_1..req_N；带登录态时 comm.uin 与 Cookie header 一起发。
 const qqMusicu = async <T = any>(
     module: string,
     method: string,
     param: Record<string, unknown>,
 ): Promise<T> => {
+    const uin = readQqSessionUin() || '0';
+    const sessionCookie = readQqSessionCookie();
+    const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'User-Agent': QQ_UA,
+        Referer: 'https://y.qq.com/',
+    };
+    if (sessionCookie) headers.Cookie = sessionCookie;
     const response = await fetch('https://u.y.qq.com/cgi-bin/musicu.fcg', {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'User-Agent': QQ_UA,
-            Referer: 'https://y.qq.com/',
-        },
+        headers,
         body: JSON.stringify({
-            comm: { ct: 23, cv: 0, uin: 0, format: 'json', platform: 'yqq.json' },
+            comm: { ct: 23, cv: 0, uin, format: 'json', platform: 'yqq.json' },
             req_1: { module, method, param },
         }),
     });
@@ -90,10 +111,11 @@ export const qqDirectPlay = async (params: Record<string, unknown>): Promise<any
     const songmid = String(params.songmid ?? '');
     if (!songmid) throw new OnlineProviderError('invalid-response', 'QQ play needs a songmid', 'qq');
     const guid = getQqGuid();
+    const uin = readQqSessionUin() || '0';
     const data = await qqMusicu(
         'vkey.GetVkeyServer',
         'CgiGetVkey',
-        { guid, songmid: [songmid], songtype: [0], uin: '0', loginflag: 1, platform: '20' },
+        { guid, songmid: [songmid], songtype: [0], uin, loginflag: 1, platform: '20' },
     );
     const entries = Array.isArray(data?.midurlinfo) ? data.midurlinfo : [];
     const entry = entries[0] ?? {};
@@ -112,12 +134,87 @@ export const qqDirectPlay = async (params: Record<string, unknown>): Promise<any
     return { data: { playUrl: playUrlMap } };
 };
 
+// ---------- 内置网页登录（安卓 WebView 官方登录页 + Cookie 提取） ----------
+
+const NATIVE_LOGIN_KEY = 'native-web-login';
+let nativeLoginPromise: Promise<{ ok: boolean; cookie?: string; message?: string }> | null = null;
+
+const startNativeWebLogin = (): Promise<{ ok: boolean; cookie?: string; message?: string }> => {
+    if (nativeLoginPromise) return nativeLoginPromise;
+    const started = openProviderWebLogin('qq')
+        .then((res) => {
+            const cookie = res?.cookie ?? '';
+            if (cookie) return { ok: true, cookie };
+            return { ok: false, message: res?.cancelled ? '登录已取消' : '未检测到登录 Cookie' };
+        })
+        .catch((err: any) => ({ ok: false, message: String(err?.message ?? err) }))
+        .finally(() => {
+            setTimeout(() => { nativeLoginPromise = null; }, 5000);
+        });
+    nativeLoginPromise = started;
+    return nativeLoginPromise;
+};
+
+const parseQqCookiePair = (cookie: string, key: string): string => {
+    for (const part of cookie.split(';')) {
+        const p = part.trim();
+        const eq = p.indexOf('=');
+        if (eq > 0 && p.substring(0, eq).trim() === key) return p.substring(eq + 1).trim();
+    }
+    return '';
+};
+
+/** 登录成功后把 QQ 会话 Cookie 导入会话存储：整段写 'qq'/'cookie'（上游后端同一键），uin 单独存。 */
+const importQqCookie = (cookie: string): { ok: boolean; reason?: string } => {
+    const uin = parseQqCookiePair(cookie, 'uin') || parseQqCookiePair(cookie, 'wxuin');
+    if (!uin && !cookie.includes('qqmusic_key')) {
+        return { ok: false, reason: 'Cookie 中未找到 QQ 音乐登录凭证' };
+    }
+    writeProviderSessionValue('qq', 'cookie', cookie);
+    if (uin) writeProviderSessionValue('qq', 'uin', uin);
+    return { ok: true };
+};
+
 // 安卓直连统一入口：operation + params → 后端风格 JSON。
 export const requestQqDirect = async (
     operation: string,
     params: Record<string, unknown>,
 ): Promise<any> => {
     switch (operation) {
+        case 'login_qr_key': {
+            startNativeWebLogin();
+            return { data: { unikey: NATIVE_LOGIN_KEY } };
+        }
+        case 'login_qr_create': {
+            // 原生页面已展示官方登录页，这里返回 1x1 透明占位图，UI 会被原生页面遮挡。
+            const transparentPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+            return { data: { qrimg: transparentPng } };
+        }
+        case 'login_qr_check': {
+            if (!nativeLoginPromise) {
+                return { code: 801 };
+            }
+            const result = await nativeLoginPromise;
+            if (result.ok && result.cookie) {
+                const imported = importQqCookie(result.cookie);
+                if (imported.ok) return { code: 803, cookie: readQqSessionCookie() };
+                return { code: 800, message: imported.reason ?? '登录失败' };
+            }
+            if (result.message?.includes('取消')) {
+                return { code: 800 };
+            }
+            return { code: 801 };
+        }
+        case 'login_status': {
+            const uin = readQqSessionUin();
+            if (!uin) return { data: { profile: null } };
+            return { data: { profile: { uin, nickname: 'QQ音乐用户', avatarUrl: '' } } };
+        }
+        case 'logout': {
+            removeProviderSessionValue('qq', 'cookie');
+            removeProviderSessionValue('qq', 'uin');
+            return undefined;
+        }
         case 'search':
             return qqDirectSearch(params);
         case 'music_play':

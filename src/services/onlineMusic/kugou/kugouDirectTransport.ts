@@ -13,7 +13,7 @@
 
 import md5 from 'blueimp-md5';
 import { OnlineProviderError } from '../../../types/onlineMusic';
-import { readProviderSessionValue, writeProviderSessionValue } from '../providerStorage';
+import { readProviderSessionValue, removeProviderSessionValue, writeProviderSessionValue } from '../providerStorage';
 
 // ---------- 常量（与 kugoumusicapi util/config.json 一致） ----------
 
@@ -411,6 +411,57 @@ const directUserPlaylist = async (params: Record<string, unknown>): Promise<any>
     });
 };
 
+// ---------- 内置网页登录（安卓 WebView 官方登录页 + Cookie 提取） ----------
+
+import { openProviderWebLogin } from '../../nativeAndroidBridge';
+
+// 与汽水登录同款模式：login_qr_key 拉起原生登录页，login_qr_create 给占位图，
+// login_qr_check 轮询登录结果，成功后把 Cookie 里的 token/userid/dfid 写入会话存储。
+const NATIVE_LOGIN_KEY = 'native-web-login';
+let nativeLoginPromise: Promise<{ ok: boolean; cookie?: string; message?: string }> | null = null;
+
+const startNativeWebLogin = (): Promise<{ ok: boolean; cookie?: string; message?: string }> => {
+    if (nativeLoginPromise) return nativeLoginPromise;
+    const started = openProviderWebLogin('kugou')
+        .then((res) => {
+            const cookie = res?.cookie ?? '';
+            if (cookie) return { ok: true, cookie };
+            return { ok: false, message: res?.cancelled ? '登录已取消' : '未检测到登录 Cookie' };
+        })
+        .catch((err: any) => ({ ok: false, message: String(err?.message ?? err) }))
+        .finally(() => {
+            setTimeout(() => { nativeLoginPromise = null; }, 5000);
+        });
+    nativeLoginPromise = started;
+    return nativeLoginPromise;
+};
+
+const parseCookiePair = (cookie: string, key: string): string => {
+    for (const part of cookie.split(';')) {
+        const p = part.trim();
+        const eq = p.indexOf('=');
+        if (eq > 0 && p.substring(0, eq).trim().toLowerCase() === key.toLowerCase()) {
+            return p.substring(eq + 1).trim();
+        }
+    }
+    return '';
+};
+
+/** 登录成功后把酷狗会话 Cookie 导入会话存储：cookie 整段 + token/userid/dfid 单独键。 */
+const importKugouCookie = (cookie: string): { ok: boolean; reason?: string } => {
+    const token = parseCookiePair(cookie, 'token') || parseCookiePair(cookie, 'kg_token');
+    const userid = parseCookiePair(cookie, 'userid') || parseCookiePair(cookie, 'kg_userid');
+    if (!token && !userid) {
+        return { ok: false, reason: 'Cookie 中未找到酷狗登录凭证' };
+    }
+    writeProviderSessionValue('kugou', 'cookie', cookie);
+    if (token) writeProviderSessionValue('kugou', 'token', token);
+    if (userid) writeProviderSessionValue('kugou', 'userid', userid);
+    const dfid = parseCookiePair(cookie, 'dfid');
+    if (dfid) writeProviderSessionValue('kugou', 'dfid', dfid);
+    return { ok: true };
+};
+
 // ---------- 入口 ----------
 
 /**
@@ -423,6 +474,41 @@ export const requestKugouDirect = async <T = unknown>(
     params: Record<string, string | number | boolean | undefined> = {},
 ): Promise<T> => {
     switch (operation) {
+        case 'login_qr_key': {
+            // 拉起内置网页登录；返回一个占位 key，UI 继续走 create/check 流程。
+            startNativeWebLogin();
+            return { data: { qrcode: NATIVE_LOGIN_KEY } } as unknown as T;
+        }
+        case 'login_qr_create': {
+            // 原生页面已展示官方登录页，这里返回 1x1 透明占位图，UI 会被原生页面遮挡。
+            const transparentPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+            return { data: { qrcode: transparentPng } } as unknown as T;
+        }
+        case 'login_qr_check': {
+            if (!nativeLoginPromise) {
+                return { data: { status: 1 } } as unknown as T;
+            }
+            const result = await nativeLoginPromise;
+            if (result.ok && result.cookie) {
+                const imported = importKugouCookie(result.cookie);
+                if (imported.ok) return { data: { status: 4, token: readProviderSessionValue('kugou', 'token') ?? '' } } as unknown as T;
+                return { data: { status: 3, message: imported.reason ?? '登录失败' } } as unknown as T;
+            }
+            if (result.message?.includes('取消')) {
+                return { data: { status: 0 } } as unknown as T;
+            }
+            return { data: { status: 1 } } as unknown as T;
+        }
+        case 'logout': {
+            removeProviderSessionValue('kugou', 'cookie');
+            removeProviderSessionValue('kugou', 'token');
+            removeProviderSessionValue('kugou', 'userid');
+            return undefined as unknown as T;
+        }
+        case 'user_detail': {
+            const userid = String(readProviderSessionValue('kugou', 'userid') ?? '');
+            return { data: { userid, username: userid } } as unknown as T;
+        }
         case 'search':
             return directSearch(params) as Promise<T>;
         case 'audio':
