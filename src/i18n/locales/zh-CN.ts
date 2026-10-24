@@ -1798,7 +1798,7 @@ export default {
     "keepScreenOnDesc": "打开后不再自动息屏，看歌词、抄歌词或放在桌上时屏幕保持点亮。关掉就恢复系统的自动息屏。",
     "playbackEngine": "播放方案",
     "playbackEngineNative": "原生播放器（推荐）",
-    "playbackEngineNativeDesc": "声音由系统原生播放器硬解码输出，流畅干净无电音，后台播放更稳；均衡器与频谱可视化不作用于声音，仅在线歌曲启用，本地歌曲自动用内置播放器。",
+    "playbackEngineNativeDesc": "整曲先缓存到本地再播放（播放过的歌下次秒开），声音由系统原生播放器硬解码输出，流畅干净无电音，后台播放更稳；均衡器与频谱可视化不作用于声音，仅在线歌曲启用，本地歌曲自动用内置播放器。",
     "playbackEngineWebview": "内置播放器（原版）",
     "playbackEngineWebviewDesc": "保持原版行为，均衡器与频谱可视化可用；安卓 WebView 在线播放时可能卡顿或出现杂音。",
     "batteryOptimization": "后台无限制",

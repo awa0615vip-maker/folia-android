@@ -25,6 +25,12 @@ import android.os.PowerManager;
 import androidx.annotation.Nullable;
 
 import java.io.InputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -40,7 +46,14 @@ public class FoliaPlaybackService extends Service {
     private static final int NOTIFICATION_ID = 31009;
     private MediaSession mediaSession;
     private final ExecutorService artworkExecutor = Executors.newSingleThreadExecutor();
+    // 整曲下载线程：与封面加载分离，避免下载阻塞封面或相互排队。
+    private final ExecutorService downloadExecutor = Executors.newSingleThreadExecutor();
     private final OkHttpClient artworkClient = new OkHttpClient();
+    // 歌曲整曲下载用：更大的超时窗口，播放前的整曲落盘。
+    private final OkHttpClient audioClient = new OkHttpClient.Builder()
+        .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
+        .build();
     private final Map<String, Bitmap> artworkCache = new ConcurrentHashMap<>();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private volatile String currentArtworkUrl = "";
@@ -84,17 +97,46 @@ public class FoliaPlaybackService extends Service {
         }
     };
 
-    /** Starts (or replaces) native playback of a remote URL. Called from the JS bridge. */
+    /**
+     * Starts (or replaces) native playback of a remote URL.
+     *
+     * Cache-then-play: the whole song is downloaded into a local file first (cacheDir/songCache),
+     * and only then does MediaPlayer play the file — network buffering can never stutter playback.
+     * Already-cached songs play instantly from the file; if the download fails we fall back to
+     * streaming the URL directly so the song is still audible.
+     */
     public void playNative(String url, long positionMs) {
         stopNativePlayer();
         nativeSourceUrl = url;
+        final File cached = songCacheFileFor(url);
+        if (cached.exists() && cached.length() > 0) {
+            startNativePlayer(cached.getAbsolutePath(), positionMs);
+            return;
+        }
+        final String requestedUrl = url;
+        downloadExecutor.execute(() -> {
+            boolean downloaded = downloadToFile(requestedUrl, cached);
+            mainHandler.post(() -> {
+                if (!requestedUrl.equals(nativeSourceUrl)) return; // the song changed meanwhile
+                if (downloaded && cached.length() > 0) {
+                    startNativePlayer(cached.getAbsolutePath(), positionMs);
+                } else {
+                    // Streaming fallback: still audible over the bridge, and the Web layer may
+                    // additionally fall back to the WebView element.
+                    startNativePlayer(requestedUrl, positionMs);
+                }
+            });
+        });
+    }
+
+    private void startNativePlayer(String source, long positionMs) {
         MediaPlayer player = new MediaPlayer();
         try {
             player.setAudioAttributes(new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                 .build());
-            player.setDataSource(url);
+            player.setDataSource(source);
             player.setOnPreparedListener(p -> {
                 if (positionMs > 0) p.seekTo((int) positionMs);
                 p.start();
@@ -123,6 +165,64 @@ public class FoliaPlaybackService extends Service {
             nativePlaying = false;
             FoliaNativePlugin.emitNativeError(error.getMessage() == null ? "prepare-failed" : error.getMessage());
             releaseNativePlayer();
+        }
+    }
+
+    /** 下载整曲到本地缓存文件；成功返回 true（目标文件非空）。 */
+    private boolean downloadToFile(String url, File target) {
+        try {
+            Request request = new Request.Builder().url(url).build();
+            try (Response response = audioClient.newCall(request).execute()) {
+                if (!response.isSuccessful()) return false;
+                ResponseBody body = response.body();
+                if (body == null) return false;
+                try (InputStream input = body.byteStream(); FileOutputStream output = new FileOutputStream(target)) {
+                    byte[] buffer = new byte[64 * 1024];
+                    int read;
+                    while ((read = input.read(buffer)) != -1) {
+                        output.write(buffer, 0, read);
+                    }
+                }
+            }
+            trimSongCache();
+            return true;
+        } catch (Exception error) {
+            return false;
+        }
+    }
+
+    private File songCacheFileFor(String url) {
+        File dir = new File(getCacheDir(), "songCache");
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+        return new File(dir, md5Hex(url) + ".bin");
+    }
+
+    /** 简单 LRU 上限：缓存文件超过 40 个或总大小超过 1.5GB 时，从最旧的开始清理。 */
+    private void trimSongCache() {
+        File dir = new File(getCacheDir(), "songCache");
+        File[] files = dir.listFiles();
+        if (files == null || files.length <= 40) return;
+        Arrays.sort(files, Comparator.comparingLong(File::lastModified));
+        long total = 0;
+        for (File file : files) total += file.length();
+        for (File file : files) {
+            if (files.length <= 40 && total <= 1536L * 1024 * 1024) break;
+            total -= file.length();
+            file.delete();
+        }
+    }
+
+    private static String md5Hex(String input) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("MD5");
+            byte[] hash = digest.digest(input.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder();
+            for (byte b : hash) hex.append(String.format("%02x", b));
+            return hex.toString();
+        } catch (Exception error) {
+            return String.valueOf(input.hashCode());
         }
     }
 
@@ -558,6 +658,7 @@ public class FoliaPlaybackService extends Service {
         abandonAudioFocus();
         progressHandler.removeCallbacks(progressPoller);
         releaseNativePlayer();
+        downloadExecutor.shutdownNow();
         artworkExecutor.shutdownNow();
         if (mediaSession != null) {
             mediaSession.setActive(false);

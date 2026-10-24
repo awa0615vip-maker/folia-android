@@ -1799,7 +1799,7 @@ export default {
 
     "playbackEngine": "Playback engine",
     "playbackEngineNative": "Native player (recommended)",
-    "playbackEngineNativeDesc": "Audio is decoded by the system MediaPlayer: smooth and clean, with steadier background playback. Equalizer and spectrum visualization do not affect the sound; online tracks only, local tracks keep the built-in player.",
+    "playbackEngineNativeDesc": "Each song is cached to local storage before it plays (already-played songs start instantly), then decoded by the system MediaPlayer: smooth and clean, with steadier background playback. Equalizer and spectrum visualization do not affect the sound; online tracks only, local tracks keep the built-in player.",
     "playbackEngineWebview": "Built-in player (original)",
     "playbackEngineWebviewDesc": "Original behavior with equalizer and spectrum visualization; WebView online playback may stutter or crackle on Android.",
     "batteryOptimization": "Unrestricted background",
