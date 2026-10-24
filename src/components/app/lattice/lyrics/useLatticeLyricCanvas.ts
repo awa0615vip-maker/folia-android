@@ -46,6 +46,10 @@ export function useLatticeLyricCanvas(hostRef: RefObject<HTMLDivElement | null>,
     const box = useRef({ width: 0, height: 0 });
     const [ready, setReady] = useState(false);
     const [failedKey, setFailedKey] = useState<string | null>(null);
+    // How many times this song's runtime creation has failed, so the first failure gets one
+    // silent retry (Android WebView can transiently fail WebGL context creation) and only the
+    // second failure falls back to the title for good.
+    const failureCounts = useRef<Map<string, number>>(new Map());
     const songKey = input?.songKey;
     const enabled = Boolean(input?.lines.some(line => line.fullText.trim()) && failedKey !== songKey);
 
@@ -62,7 +66,17 @@ export function useLatticeLyricCanvas(hostRef: RefObject<HTMLDivElement | null>,
             if (!active) return;
             console.warn('[Lattice lyrics] Falling back to the song title', error);
             runtimeRef.current?.destroy(); runtimeRef.current = null;
-            setReady(false); setFailedKey(initial.songKey);
+            setReady(false);
+            const attempts = (failureCounts.current.get(initial.songKey) ?? 0) + 1;
+            failureCounts.current.set(initial.songKey, attempts);
+            if (attempts < 2) {
+                // One silent retry: WebGL context creation on Android WebView can fail
+                // transiently, and a single hiccup should not hide the lyrics forever.
+                setTimeout(() => {
+                    if (active) setFailedKey(previous => previous === initial.songKey ? null : previous);
+                }, 1200);
+            }
+            setFailedKey(initial.songKey);
         };
         const session = startLatticeLyricSession(signal => {
             const parked = takeParkedRuntime(initial.currentTime);
